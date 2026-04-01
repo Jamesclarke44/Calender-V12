@@ -38,34 +38,46 @@ def compute_indicators(df):
 
     # RSI
     delta = df["Close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
     # ATR
     high_low = df["High"] - df["Low"]
-    high_close = np.abs(df["High"] - df["Close"].shift())
-    low_close = np.abs(df["Low"] - df["Close"].shift())
+    high_close = (df["High"] - df["Close"].shift()).abs()
+    low_close = (df["Low"] - df["Close"].shift()).abs()
+
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df["ATR"] = tr.rolling(14).mean()
 
-    # VWAP (approx using typical price)
+    # VWAP (rolling approximation)
     tp = (df["High"] + df["Low"] + df["Close"]) / 3
     df["VWAP"] = tp.rolling(20).mean()
 
-    # ADX (simplified approximation)
-    plus_dm = df["High"].diff()
-    minus_dm = df["Low"].diff()
+    # ---------------- ADX (FIXED) ----------------
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
 
-    plus_dm[plus_dm < 0] = 0
-    minus_dm[minus_dm > 0] = 0
+    plus_dm = high.diff()
+    minus_dm = low.diff()
 
-    tr14 = tr.rolling(14).mean()
-    plus_di = 100 * (plus_dm.rolling(14).mean() / tr14)
-    minus_di = 100 * (minus_dm.abs().rolling(14).mean() / tr14)
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean()
+
+    plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
 
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+
     df["ADX"] = dx.rolling(14).mean()
 
     return df
@@ -73,7 +85,7 @@ def compute_indicators(df):
 # -----------------------------
 # DECISION ENGINE
 # -----------------------------
-def decision_engine(adx, rsi, vwap_drift, atr_pct):
+def decision_engine(adx, rsi, vwap_drift):
     if adx < 25 and 45 <= rsi <= 55 and vwap_drift < 0.01:
         return "GO", "Range + neutral conditions"
     elif adx >= 25:
@@ -137,6 +149,10 @@ if st.button("Run Scan"):
         last = df.iloc[-1]
 
         price = last["Close"]
+
+        if pd.isna(price):
+            continue
+
         rsi = last["RSI"]
         adx = last["ADX"]
         atr = last["ATR"]
@@ -145,13 +161,10 @@ if st.button("Run Scan"):
         sma50 = last["SMA50"]
         sma200 = last["SMA200"]
 
-        if pd.isna(price):
-            continue
-
         atr_pct = (atr / price) * 100 if price else 0
         vwap_drift = abs(price - vwap) / price if price else 0
 
-        decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct)
+        decision, reason = decision_engine(adx, rsi, vwap_drift)
         bias = get_bias(price, sma50, sma200)
         regime = get_regime(adx)
         score = score_setup(adx, rsi, vwap_drift, atr_pct)
@@ -177,7 +190,7 @@ if st.button("Run Scan"):
             ascending=[True, False]
         )
 
-        # Highlight function
+        # Highlight rows
         def highlight(row):
             if row["Decision"] == "GO":
                 return ["background-color: lightgreen"] * len(row)
@@ -190,4 +203,4 @@ if st.button("Run Scan"):
         st.dataframe(df_results.style.apply(highlight, axis=1))
 
     else:
-        st.write("No valid data returned.")
+        st.write("No valid results returned.")
