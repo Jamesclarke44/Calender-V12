@@ -32,10 +32,10 @@ st.write(f"Scanning {len(universe)} symbols...")
 def fetch_data(ticker):
     try:
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        if df is not None:
+        if df is not None and not df.empty:
             df.reset_index(inplace=True)
         return df
-    except:
+    except Exception:
         return None
 
 # -----------------------------
@@ -66,33 +66,33 @@ def compute_indicators(df):
     tp = (df["High"] + df["Low"] + df["Close"]) / 3
     df["VWAP"] = tp.rolling(20).mean()
 
-    # ADX
+    # ADX (clean implementation)
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
 
-    tr1 = high - low
-    tr2 = (high - close.shift()).abs()
-    tr3 = (low - close.shift()).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-    plus_dm = high.diff()
-    minus_dm = low.diff()
-
-    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
 
     atr = tr.rolling(14).mean()
+
+    plus_dm = (high.diff()).clip(lower=0)
+    minus_dm = (-low.diff()).clip(lower=0)
+
+    plus_dm = plus_dm.where(plus_dm > minus_dm, 0)
+    minus_dm = minus_dm.where(minus_dm > plus_dm, 0)
 
     plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
     minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
 
-    dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100
-    dx = dx.replace([np.inf, -np.inf], np.nan)
-
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     adx = dx.rolling(14).mean()
 
-    df["ADX"] = pd.Series(adx.values, index=df.index)
+    # Ensure 1-D numeric Series
+    df["ADX"] = pd.to_numeric(adx, errors="coerce")
 
     return df
 
@@ -121,6 +121,7 @@ if st.button("Run Scan"):
         df = fetch_data(ticker)
 
         if df is None or df.empty:
+            progress_bar.progress((i + 1) / total)
             continue
 
         df = compute_indicators(df)
@@ -129,6 +130,7 @@ if st.button("Run Scan"):
         price = last["Close"]
 
         if pd.isna(price):
+            progress_bar.progress((i + 1) / total)
             continue
 
         rsi = last["RSI"]
@@ -139,7 +141,8 @@ if st.button("Run Scan"):
         sma50 = last["SMA50"]
         sma200 = last["SMA200"]
 
-        if pd.isna(adx) or pd.isna(rsi):
+        if pd.isna(adx) or pd.isna(rsi) or pd.isna(vwap):
+            progress_bar.progress((i + 1) / total)
             continue
 
         vwap_drift = abs(price - vwap) / price if price else 0
@@ -168,7 +171,6 @@ if st.button("Run Scan"):
     # -----------------------------
     if results:
         df_results = pd.DataFrame(results)
-
         df_results = df_results.sort_values(by="Score", ascending=False)
 
         st.subheader("🎯 Neutral Market Setups")
