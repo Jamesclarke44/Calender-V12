@@ -55,41 +55,35 @@ def compute_indicators(df):
     df["VWAP"] = tp.rolling(20).mean()
 
     # -----------------------------
-    # ADX (ROBUST + SAFE)
+    # ADX (STABLE IMPLEMENTATION)
     # -----------------------------
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
 
-    # True Range
     tr1 = high - low
     tr2 = (high - close.shift()).abs()
     tr3 = (low - close.shift()).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-    # Directional Movement
     plus_dm = high.diff()
     minus_dm = low.diff()
 
     plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
     minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
 
-    # ATR smoothing
     atr = tr.rolling(14).mean()
 
-    # DI calculations
     plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
     minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
 
-    # DX
     dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100
     dx = dx.replace([np.inf, -np.inf], np.nan)
 
-    # ADX
     adx = dx.rolling(14).mean()
 
-    # Assign safely
-    df["ADX"] = adx
+    # ✅ SAFE ASSIGNMENT
+    df["ADX"] = pd.Series(adx.values, index=df.index)
 
     return df
 
@@ -111,9 +105,7 @@ def get_bias(price, sma50, sma200):
     return "Neutral"
 
 def get_regime(adx):
-    if adx > 25:
-        return "Trending"
-    return "Range"
+    return "Trending" if adx > 25 else "Range"
 
 # -----------------------------
 # SCORING SYSTEM
