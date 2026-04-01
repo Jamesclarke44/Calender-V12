@@ -313,6 +313,25 @@ def fetch_daily_data(ticker: str, period: str = "1y"):
 def compute_indicators(df: pd.DataFrame):
     df = df.copy()
 
+    # --- FIXES FOR YFINANCE DATA ---
+
+    # Flatten multi-index columns if present
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]
+
+    # Ensure numeric types
+    for col in ["Close", "High", "Low", "Volume"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Drop rows missing essential data
+    df = df.dropna(subset=["Close", "High", "Low", "Volume"])
+
+    if df.empty:
+        return df
+
+    # --- INDICATORS ---
+
     rsi_ind = RSIIndicator(close=df["Close"], window=14)
     df["RSI"] = rsi_ind.rsi()
 
@@ -397,164 +416,167 @@ if st.button("🚀 Evaluate Trade (Auto Data)"):
         st.error("Please enter a ticker (e.g., SPY).")
     else:
         df = fetch_daily_data(ticker)
-        if df is None:
+        if df is None or df.empty:
             st.error("Could not fetch data for this ticker.")
         else:
             df = compute_indicators(df)
-            last = df.iloc[-1]
-
-            price = float(last["Close"])
-            vwap = float(last["VWAP"]) if not math.isnan(last["VWAP"]) else price
-            rsi = float(last["RSI"])
-            adx = float(last["ADX"])
-            atr = float(last["ATR"])
-            bbl_low = float(last["BB_Low"])
-            bbl_high = float(last["BB_High"])
-
-            trend_structure = infer_trend_structure(last)
-            atr_trend = infer_atr_trend(df)
-
-            iv, ivr = fetch_iv_and_ivr()
-            dte = 30
-
-            atr_pct = (atr / price) * 100 if price > 0 else 0
-            move = expected_move(price, iv, dte)
-            vwap_drift = abs(price - vwap) / price if price > 0 else 0
-
-            last_bar_date = df.index[-1].date()
-            market_closed, last_data_date = detect_market_closed(last_bar_date)
-
-            decision, env_score, reasons = classify_trade(
-                price, vwap, rsi, adx, atr_pct, ivr,
-                bbl_low, bbl_high, vwap_drift,
-                atr_trend, trend_structure
-            )
-
-            strike = round(price)
-
-            st.markdown("---")
-            st.subheader(f"📈 {ticker} Analysis")
-
-            if market_closed:
-                st.warning(f"Market is closed — using last available daily data ({last_data_date.isoformat()}).")
-
-            if decision == "GO":
-                st.success(f"GO ✅ (Environment Score {env_score}/6)")
-            elif decision == "CAUTION":
-                st.warning(f"CAUTION ⚠️ (Environment Score {env_score}/6)")
+            if df.empty:
+                st.error("Not enough clean data to compute indicators.")
             else:
-                st.error(f"NO GO ⛔ (Environment Score {env_score}/6)")
+                last = df.iloc[-1]
 
-            st.subheader("🧠 Reasoning")
-            for r in reasons:
-                st.write(f"- {r}")
+                price = float(last["Close"])
+                vwap = float(last["VWAP"]) if not math.isnan(last["VWAP"]) else price
+                rsi = float(last["RSI"])
+                adx = float(last["ADX"])
+                atr = float(last["ATR"])
+                bbl_low = float(last["BB_Low"])
+                bbl_high = float(last["BB_High"])
 
-            st.subheader("📊 Key Metrics (Auto-Fetched)")
-            st.write(f"- Price: {price:.2f}")
-            st.write(f"- VWAP: {vwap:.2f}")
-            st.write(f"- VWAP Drift: {vwap_drift*100:.2f}%")
-            st.write(f"- ATR: {atr:.2f}")
-            st.write(f"- ATR %: {atr_pct:.2f}%")
-            st.write(f"- ATR Trend: {atr_trend}")
-            st.write(f"- ADX: {adx:.1f}")
-            st.write(f"- RSI: {rsi:.1f}")
-            st.write(f"- BB Low: {bbl_low:.2f}")
-            st.write(f"- BB High: {bbl_high:.2f}")
-            st.write(f"- IV (proxy from VIX): {iv:.2f}%")
-            st.write(f"- IV Rank (proxy): {ivr:.1f}")
-            st.write(f"- Trend Structure: {trend_structure}")
+                trend_structure = infer_trend_structure(last)
+                atr_trend = infer_atr_trend(df)
 
-            # ----------------- DOUBLE CALENDAR GO / NO-GO -----------------
+                iv, ivr = fetch_iv_and_ivr()
+                dte = 30
 
-            st.subheader("📘 Double Calendar GO / NO-GO")
+                atr_pct = (atr / price) * 100 if price > 0 else 0
+                move = expected_move(price, iv, dte)
+                vwap_drift = abs(price - vwap) / price if price > 0 else 0
 
-            dc_decision, dc_reasons = double_calendar_go_no_go(
-                adx, rsi, vwap_drift, atr_pct, ivr,
-                atr_trend, trend_structure, env_score
-            )
+                last_bar_date = df.index[-1].date()
+                market_closed, last_data_date = detect_market_closed(last_bar_date)
 
-            if dc_decision == "GO":
-                st.success("Double Calendar: GO")
-                for r in dc_reasons:
-                    st.write(f"- {r}")
-            elif dc_decision == "CAUTION":
-                st.warning("Double Calendar: CAUTION")
-                for r in dc_reasons:
-                    st.write(f"- {r}")
-            else:
-                st.error("Double Calendar: NO GO")
-                st.write("Reasons:")
-                for r in dc_reasons:
-                    st.write(f"- {r}")
+                decision, env_score, reasons = classify_trade(
+                    price, vwap, rsi, adx, atr_pct, ivr,
+                    bbl_low, bbl_high, vwap_drift,
+                    atr_trend, trend_structure
+                )
 
-            # ----------------- STRATEGY & SIZING -----------------
+                strike = round(price)
 
-            st.subheader("🎯 Strategy Recommendation")
-            strategy = recommend_strategy(
-                adx, rsi, vwap_drift, ivr,
-                trend_structure, atr_trend, env_score,
-                dc_decision
-            )
-            st.write(strategy)
+                st.markdown("---")
+                st.subheader(f"📈 {ticker} Analysis")
 
-            st.subheader("📏 Position Sizing")
-            sizing = position_sizing(env_score, decision)
-            st.write(sizing)
+                if market_closed:
+                    st.warning(f"Market is closed — using last available daily data ({last_data_date.isoformat()}).")
 
-            st.subheader("📈 Expected Move (30D, IV Proxy)")
-            st.write(f"± {move:.2f}")
-
-            max_profit_low = strike - (move * 0.25)
-            max_profit_high = strike + (move * 0.25)
-
-            st.subheader("💰 Profit Zone (Single Calendar Approximation)")
-            st.write(f"🟢 Max Profit: {max_profit_low:.2f} → {max_profit_high:.2f}")
-            st.write(f"🟡 Expected Range: {price - move:.2f} → {price + move:.2f}")
-
-            # ----------------- DOUBLE CALENDAR OPTIMIZER -----------------
-
-            st.subheader("🎯 Double Calendar Optimizer")
-
-            front_dte = 10
-            back_dte = 45
-            front_iv = iv * 0.8
-            back_iv = iv
-
-            if dc_decision == "NO GO":
-                st.info("Optimizer hidden — Double Calendar is a NO GO.")
-            else:
-                best = double_calendar_optimizer(price, move, front_dte, back_dte, front_iv, back_iv)
-
-                if best:
-                    st.write(f"Strike: {best['strike']}")
-                    st.write(f"Front DTE: {best['front_dte']}")
-                    st.write(f"Back DTE: {best['back_dte']}")
-                    st.write(f"Score: {best['score']:.2f}")
+                if decision == "GO":
+                    st.success(f"GO ✅ (Environment Score {env_score}/6)")
+                elif decision == "CAUTION":
+                    st.warning(f"CAUTION ⚠️ (Environment Score {env_score}/6)")
                 else:
-                    st.write("No suitable double-calendar configuration found.")
+                    st.error(f"NO GO ⛔ (Environment Score {env_score}/6)")
 
-            # ----------------- REAL P&L -----------------
+                st.subheader("🧠 Reasoning")
+                for r in reasons:
+                    st.write(f"- {r}")
 
-            st.subheader("📈 Real P&L Visualization (Single Calendar Approximation)")
+                st.subheader("📊 Key Metrics (Auto-Fetched)")
+                st.write(f"- Price: {price:.2f}")
+                st.write(f"- VWAP: {vwap:.2f}")
+                st.write(f"- VWAP Drift: {vwap_drift*100:.2f}%")
+                st.write(f"- ATR: {atr:.2f}")
+                st.write(f"- ATR %: {atr_pct:.2f}%")
+                st.write(f"- ATR Trend: {atr_trend}")
+                st.write(f"- ADX: {adx:.1f}")
+                st.write(f"- RSI: {rsi:.1f}")
+                st.write(f"- BB Low: {bbl_low:.2f}")
+                st.write(f"- BB High: {bbl_high:.2f}")
+                st.write(f"- IV (proxy from VIX): {iv:.2f}%")
+                st.write(f"- IV Rank (proxy): {ivr:.1f}")
+                st.write(f"- Trend Structure: {trend_structure}")
 
-            fig = real_calendar_pnl(price, strike, move, front_iv, back_iv, debit)
-            st.pyplot(fig)
+                # ----------------- DOUBLE CALENDAR GO / NO-GO -----------------
 
-            # ----------------- JOURNAL -----------------
+                st.subheader("📘 Double Calendar GO / NO-GO")
 
-            if "journal" not in st.session_state:
-                st.session_state.journal = []
+                dc_decision, dc_reasons = double_calendar_go_no_go(
+                    adx, rsi, vwap_drift, atr_pct, ivr,
+                    atr_trend, trend_structure, env_score
+                )
 
-            st.session_state.journal.append({
-                "time": datetime.now().strftime("%H:%M"),
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "ticker": ticker,
-                "decision": decision,
-                "env_score": env_score,
-                "strike": strike,
-                "strategy": strategy,
-                "sizing": sizing
-            })
+                if dc_decision == "GO":
+                    st.success("Double Calendar: GO")
+                    for r in dc_reasons:
+                        st.write(f"- {r}")
+                elif dc_decision == "CAUTION":
+                    st.warning("Double Calendar: CAUTION")
+                    for r in dc_reasons:
+                        st.write(f"- {r}")
+                else:
+                    st.error("Double Calendar: NO GO")
+                    st.write("Reasons:")
+                    for r in dc_reasons:
+                        st.write(f"- {r}")
+
+                # ----------------- STRATEGY & SIZING -----------------
+
+                st.subheader("🎯 Strategy Recommendation")
+                strategy = recommend_strategy(
+                    adx, rsi, vwap_drift, ivr,
+                    trend_structure, atr_trend, env_score,
+                    dc_decision
+                )
+                st.write(strategy)
+
+                st.subheader("📏 Position Sizing")
+                sizing = position_sizing(env_score, decision)
+                st.write(sizing)
+
+                st.subheader("📈 Expected Move (30D, IV Proxy)")
+                st.write(f"± {move:.2f}")
+
+                max_profit_low = strike - (move * 0.25)
+                max_profit_high = strike + (move * 0.25)
+
+                st.subheader("💰 Profit Zone (Single Calendar Approximation)")
+                st.write(f"🟢 Max Profit: {max_profit_low:.2f} → {max_profit_high:.2f}")
+                st.write(f"🟡 Expected Range: {price - move:.2f} → {price + move:.2f}")
+
+                # ----------------- DOUBLE CALENDAR OPTIMIZER -----------------
+
+                st.subheader("🎯 Double Calendar Optimizer")
+
+                front_dte = 10
+                back_dte = 45
+                front_iv = iv * 0.8
+                back_iv = iv
+
+                if dc_decision == "NO GO":
+                    st.info("Optimizer hidden — Double Calendar is a NO GO.")
+                else:
+                    best = double_calendar_optimizer(price, move, front_dte, back_dte, front_iv, back_iv)
+
+                    if best:
+                        st.write(f"Strike: {best['strike']}")
+                        st.write(f"Front DTE: {best['front_dte']}")
+                        st.write(f"Back DTE: {best['back_dte']}")
+                        st.write(f"Score: {best['score']:.2f}")
+                    else:
+                        st.write("No suitable double-calendar configuration found.")
+
+                # ----------------- REAL P&L -----------------
+
+                st.subheader("📈 Real P&L Visualization (Single Calendar Approximation)")
+
+                fig = real_calendar_pnl(price, strike, move, front_iv, back_iv, debit)
+                st.pyplot(fig)
+
+                # ----------------- JOURNAL -----------------
+
+                if "journal" not in st.session_state:
+                    st.session_state.journal = []
+
+                st.session_state.journal.append({
+                    "time": datetime.now().strftime("%H:%M"),
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "ticker": ticker,
+                    "decision": decision,
+                    "env_score": env_score,
+                    "strike": strike,
+                    "strategy": strategy,
+                    "sizing": sizing
+                })
 
 # ----------------- JOURNAL -----------------
 
