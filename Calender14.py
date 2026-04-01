@@ -44,41 +44,52 @@ def compute_indicators(df):
     df["RSI"] = 100 - (100 / (1 + rs))
 
     # ATR
-    high_low = df["High"] - df["Low"]
-    high_close = (df["High"] - df["Close"].shift()).abs()
-    low_close = (df["Low"] - df["Close"].shift()).abs()
-
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    tr1 = df["High"] - df["Low"]
+    tr2 = (df["High"] - df["Close"].shift()).abs()
+    tr3 = (df["Low"] - df["Close"].shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     df["ATR"] = tr.rolling(14).mean()
 
     # VWAP (rolling approximation)
     tp = (df["High"] + df["Low"] + df["Close"]) / 3
     df["VWAP"] = tp.rolling(20).mean()
 
-    # ---------------- ADX (FIXED) ----------------
+    # -----------------------------
+    # ADX (ROBUST + SAFE)
+    # -----------------------------
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
 
+    # True Range
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Directional Movement
     plus_dm = high.diff()
     minus_dm = low.diff()
 
     plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
     minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
 
-    tr1 = high - low
-    tr2 = (high - close.shift()).abs()
-    tr3 = (low - close.shift()).abs()
-
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    # ATR smoothing
     atr = tr.rolling(14).mean()
 
+    # DI calculations
     plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
     minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
 
-    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    # DX
+    dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100
+    dx = dx.replace([np.inf, -np.inf], np.nan)
 
-    df["ADX"] = dx.rolling(14).mean()
+    # ADX
+    adx = dx.rolling(14).mean()
+
+    # Assign safely
+    df["ADX"] = adx
 
     return df
 
@@ -133,7 +144,7 @@ def score_setup(adx, rsi, vwap_drift, atr_pct):
     return score
 
 # -----------------------------
-# SCAN BUTTON
+# SCAN
 # -----------------------------
 if st.button("Run Scan"):
 
@@ -184,7 +195,7 @@ if st.button("Run Scan"):
     if results:
         df_results = pd.DataFrame(results)
 
-        # Sort best setups first
+        # Sort: GO first, then highest score
         df_results = df_results.sort_values(
             by=["Decision", "Score"],
             ascending=[True, False]
@@ -199,9 +210,7 @@ if st.button("Run Scan"):
             return [""] * len(row)
 
         st.subheader("📊 Scan Results (Ranked)")
-
         st.dataframe(df_results.style.apply(highlight, axis=1))
 
     else:
         st.write("No valid results returned.")
-        
