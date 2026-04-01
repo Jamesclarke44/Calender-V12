@@ -380,18 +380,35 @@ def infer_atr_trend(df: pd.DataFrame, lookback: int = 10):
     return "Stable"
 
 
+# ----------------- SAFE VIX FETCH (PATCHED) -----------------
+
 def fetch_iv_and_ivr():
-    vix = yf.download("^VIX", period="1y", interval="1d")
-    if vix.empty:
+    try:
+        vix = yf.download("^VIX", period="1y", interval="1d")
+    except:
+        return 20.0, 30.0  # fallback
+
+    # If VIX data is empty → fallback
+    if vix is None or vix.empty or "Close" not in vix.columns:
         return 20.0, 30.0
+
+    # Clean Close column
+    vix["Close"] = pd.to_numeric(vix["Close"], errors="coerce")
     vix["Close"] = vix["Close"].fillna(method="ffill")
+
+    # If still empty → fallback
+    if vix["Close"].dropna().empty:
+        return 20.0, 30.0
+
     iv = float(vix["Close"].iloc[-1])
     iv_min = float(vix["Close"].min())
     iv_max = float(vix["Close"].max())
+
     if iv_max == iv_min:
         ivr = 50.0
     else:
         ivr = (iv - iv_min) / (iv_max - iv_min) * 100
+
     return iv, ivr
 
 
@@ -454,137 +471,4 @@ if st.button("🚀 Evaluate Trade (Auto Data)"):
 
                 strike = round(price)
 
-                st.markdown("---")
-                st.subheader(f"📈 {ticker} Analysis")
-
-                if market_closed:
-                    st.warning(f"Market is closed — using last available daily data ({last_data_date.isoformat()}).")
-
-                if decision == "GO":
-                    st.success(f"GO ✅ (Environment Score {env_score}/6)")
-                elif decision == "CAUTION":
-                    st.warning(f"CAUTION ⚠️ (Environment Score {env_score}/6)")
-                else:
-                    st.error(f"NO GO ⛔ (Environment Score {env_score}/6)")
-
-                st.subheader("🧠 Reasoning")
-                for r in reasons:
-                    st.write(f"- {r}")
-
-                st.subheader("📊 Key Metrics (Auto-Fetched)")
-                st.write(f"- Price: {price:.2f}")
-                st.write(f"- VWAP: {vwap:.2f}")
-                st.write(f"- VWAP Drift: {vwap_drift*100:.2f}%")
-                st.write(f"- ATR: {atr:.2f}")
-                st.write(f"- ATR %: {atr_pct:.2f}%")
-                st.write(f"- ATR Trend: {atr_trend}")
-                st.write(f"- ADX: {adx:.1f}")
-                st.write(f"- RSI: {rsi:.1f}")
-                st.write(f"- BB Low: {bbl_low:.2f}")
-                st.write(f"- BB High: {bbl_high:.2f}")
-                st.write(f"- IV (proxy from VIX): {iv:.2f}%")
-                st.write(f"- IV Rank (proxy): {ivr:.1f}")
-                st.write(f"- Trend Structure: {trend_structure}")
-
-                # ----------------- DOUBLE CALENDAR GO / NO-GO -----------------
-
-                st.subheader("📘 Double Calendar GO / NO-GO")
-
-                dc_decision, dc_reasons = double_calendar_go_no_go(
-                    adx, rsi, vwap_drift, atr_pct, ivr,
-                    atr_trend, trend_structure, env_score
-                )
-
-                if dc_decision == "GO":
-                    st.success("Double Calendar: GO")
-                    for r in dc_reasons:
-                        st.write(f"- {r}")
-                elif dc_decision == "CAUTION":
-                    st.warning("Double Calendar: CAUTION")
-                    for r in dc_reasons:
-                        st.write(f"- {r}")
-                else:
-                    st.error("Double Calendar: NO GO")
-                    st.write("Reasons:")
-                    for r in dc_reasons:
-                        st.write(f"- {r}")
-
-                # ----------------- STRATEGY & SIZING -----------------
-
-                st.subheader("🎯 Strategy Recommendation")
-                strategy = recommend_strategy(
-                    adx, rsi, vwap_drift, ivr,
-                    trend_structure, atr_trend, env_score,
-                    dc_decision
-                )
-                st.write(strategy)
-
-                st.subheader("📏 Position Sizing")
-                sizing = position_sizing(env_score, decision)
-                st.write(sizing)
-
-                st.subheader("📈 Expected Move (30D, IV Proxy)")
-                st.write(f"± {move:.2f}")
-
-                max_profit_low = strike - (move * 0.25)
-                max_profit_high = strike + (move * 0.25)
-
-                st.subheader("💰 Profit Zone (Single Calendar Approximation)")
-                st.write(f"🟢 Max Profit: {max_profit_low:.2f} → {max_profit_high:.2f}")
-                st.write(f"🟡 Expected Range: {price - move:.2f} → {price + move:.2f}")
-
-                # ----------------- DOUBLE CALENDAR OPTIMIZER -----------------
-
-                st.subheader("🎯 Double Calendar Optimizer")
-
-                front_dte = 10
-                back_dte = 45
-                front_iv = iv * 0.8
-                back_iv = iv
-
-                if dc_decision == "NO GO":
-                    st.info("Optimizer hidden — Double Calendar is a NO GO.")
-                else:
-                    best = double_calendar_optimizer(price, move, front_dte, back_dte, front_iv, back_iv)
-
-                    if best:
-                        st.write(f"Strike: {best['strike']}")
-                        st.write(f"Front DTE: {best['front_dte']}")
-                        st.write(f"Back DTE: {best['back_dte']}")
-                        st.write(f"Score: {best['score']:.2f}")
-                    else:
-                        st.write("No suitable double-calendar configuration found.")
-
-                # ----------------- REAL P&L -----------------
-
-                st.subheader("📈 Real P&L Visualization (Single Calendar Approximation)")
-
-                fig = real_calendar_pnl(price, strike, move, front_iv, back_iv, debit)
-                st.pyplot(fig)
-
-                # ----------------- JOURNAL -----------------
-
-                if "journal" not in st.session_state:
-                    st.session_state.journal = []
-
-                st.session_state.journal.append({
-                    "time": datetime.now().strftime("%H:%M"),
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "ticker": ticker,
-                    "decision": decision,
-                    "env_score": env_score,
-                    "strike": strike,
-                    "strategy": strategy,
-                    "sizing": sizing
-                })
-
-# ----------------- JOURNAL -----------------
-
-st.markdown("---")
-st.subheader("📓 Trade Journal")
-
-if "journal" in st.session_state:
-    for j in reversed(st.session_state.journal):
-        st.write(j)
-else:
-    st.write("No trades yet.")
+                st.markdown
