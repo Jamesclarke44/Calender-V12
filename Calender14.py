@@ -1,161 +1,110 @@
 import streamlit as st
+import math
+import time
 import pandas as pd
 import yfinance as yf
-import numpy as np
+from ta.trend import ADXIndicator
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands, AverageTrueRange
+from ta.volume import VolumeWeightedAveragePrice
 
-# -----------------------------
-# APP TITLE
-# -----------------------------
-st.title("📊 Smart Multi-Ticker Scanner")
+st.set_page_config(page_title="Trading Engine Lite", layout="centered")
 
-# -----------------------------
-# INPUT
-# -----------------------------
-tickers_input = st.text_input(
-    "Enter tickers (comma separated)",
-    "SPY,QQQ,DIA"
-).upper()
+# ----------------- FUNCTIONS -----------------
 
-ticker_list = [t.strip() for t in tickers_input.split(",") if t.strip()]
-
-# -----------------------------
-# DATA FETCH
-# -----------------------------
 def fetch_data(ticker):
-    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-    df.reset_index(inplace=True)
+    df = yf.download(ticker, period="6mo", interval="1d")
+    if df.empty:
+        return None
     return df
 
-# -----------------------------
-# INDICATORS
-# -----------------------------
 def compute_indicators(df):
     df = df.copy()
 
-    # Moving averages
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]
+
+    df = df.dropna()
+
+    df["RSI"] = RSIIndicator(df["Close"]).rsi()
+    df["ADX"] = ADXIndicator(df["High"], df["Low"], df["Close"]).adx()
+    df["ATR"] = AverageTrueRange(df["High"], df["Low"], df["Close"]).average_true_range()
+
+    bb = BollingerBands(df["Close"])
+    df["BB_High"] = bb.bollinger_hband()
+    df["BB_Low"] = bb.bollinger_lband()
+
+    vwap = VolumeWeightedAveragePrice(
+        df["High"], df["Low"], df["Close"], df["Volume"]
+    )
+    df["VWAP"] = vwap.volume_weighted_average_price()
+
     df["SMA50"] = df["Close"].rolling(50).mean()
     df["SMA200"] = df["Close"].rolling(200).mean()
 
-    # RSI
-    delta = df["Close"].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-
-    # ATR
-    tr1 = df["High"] - df["Low"]
-    tr2 = (df["High"] - df["Close"].shift()).abs()
-    tr3 = (df["Low"] - df["Close"].shift()).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    df["ATR"] = tr.rolling(14).mean()
-
-    # VWAP (rolling approximation)
-    tp = (df["High"] + df["Low"] + df["Close"]) / 3
-    df["VWAP"] = tp.rolling(20).mean()
-
-    # -----------------------------
-    # ADX (STABLE IMPLEMENTATION)
-    # -----------------------------
-    high = df["High"]
-    low = df["Low"]
-    close = df["Close"]
-
-    tr1 = high - low
-    tr2 = (high - close.shift()).abs()
-    tr3 = (low - close.shift()).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-    plus_dm = high.diff()
-    minus_dm = low.diff()
-
-    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-
-    atr = tr.rolling(14).mean()
-
-    plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
-    minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
-
-    dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100
-    dx = dx.replace([np.inf, -np.inf], np.nan)
-
-    adx = dx.rolling(14).mean()
-
-    # ✅ SAFE ASSIGNMENT
-    df["ADX"] = pd.Series(adx.values, index=df.index)
-
     return df
 
-# -----------------------------
-# DECISION ENGINE
-# -----------------------------
-def decision_engine(adx, rsi, vwap_drift):
-    if adx < 25 and 45 <= rsi <= 55 and vwap_drift < 0.01:
-        return "GO", "Range + neutral conditions"
-    elif adx >= 25:
-        return "CAUTION", "Trending market"
-    return "NO GO", "No clear edge"
+# ----------------- LOGIC -----------------
 
-def get_bias(price, sma50, sma200):
-    if price > sma50 and sma50 > sma200:
-        return "Bullish"
-    elif price < sma50 and sma50 < sma200:
-        return "Bearish"
-    return "Neutral"
-
-def get_regime(adx):
-    return "Trending" if adx > 25 else "Range"
-
-# -----------------------------
-# SCORING SYSTEM
-# -----------------------------
-def score_setup(adx, rsi, vwap_drift, atr_pct):
+def get_bias(price, sma50, sma200, rsi, vwap):
     score = 0
 
-    if adx < 20:
-        score += 2
+    score += 1 if price > sma50 else -1
+    score += 1 if sma50 > sma200 else -1
+
+    if rsi > 55:
+        score += 1
+    elif rsi < 45:
+        score -= 1
+
+    score += 1 if price > vwap else -1
+
+    if score >= 2:
+        return "BULLISH"
+    elif score <= -2:
+        return "BEARISH"
+    return "NEUTRAL"
+
+def get_regime(adx, atr_pct):
+    if adx < 20 and atr_pct < 2:
+        return "RANGE (IDEAL)"
     elif adx < 25:
-        score += 1
+        return "TRANSITION"
+    return "TRENDING"
 
-    if 45 <= rsi <= 55:
-        score += 2
-    elif 40 <= rsi <= 60:
-        score += 1
+def decision_engine(adx, rsi, vwap_drift, atr_pct):
+    if adx > 25:
+        return "NO GO", "Trending market"
+    if rsi < 40 or rsi > 60:
+        return "NO GO", "Momentum not neutral"
+    if vwap_drift > 0.01:
+        return "NO GO", "Too far from VWAP"
+    if atr_pct > 2.5:
+        return "NO GO", "Volatility too high"
 
-    if vwap_drift < 0.005:
-        score += 2
-    elif vwap_drift < 0.01:
-        score += 1
+    return "GO", "Clean neutral environment"
 
-    if atr_pct < 2:
-        score += 2
-    elif atr_pct < 3:
-        score += 1
+# ----------------- UI -----------------
 
-    return score
+st.title("📊 Trading Engine Lite")
 
-# -----------------------------
-# SCAN
-# -----------------------------
-if st.button("Run Scan"):
+ticker = st.text_input("Ticker", value="SPY").upper()
 
-    results = []
+auto = st.checkbox("Auto Refresh (60s)", value=True)
 
-    for ticker in ticker_list:
-        df = fetch_data(ticker)
+run = st.button("Run") if not auto else True
 
-        if df is None or df.empty:
-            continue
+if run and ticker:
 
+    df = fetch_data(ticker)
+
+    if df is None:
+        st.error("Invalid ticker")
+    else:
         df = compute_indicators(df)
         last = df.iloc[-1]
 
         price = last["Close"]
-
-        if pd.isna(price):
-            continue
-
         rsi = last["RSI"]
         adx = last["ADX"]
         atr = last["ATR"]
@@ -164,45 +113,42 @@ if st.button("Run Scan"):
         sma50 = last["SMA50"]
         sma200 = last["SMA200"]
 
-        atr_pct = (atr / price) * 100 if price else 0
-        vwap_drift = abs(price - vwap) / price if price else 0
+        atr_pct = (atr / price) * 100
+        vwap_drift = abs(price - vwap) / price
 
-        decision, reason = decision_engine(adx, rsi, vwap_drift)
-        bias = get_bias(price, sma50, sma200)
-        regime = get_regime(adx)
-        score = score_setup(adx, rsi, vwap_drift, atr_pct)
+        # --- CORE OUTPUT ---
 
-        results.append({
-            "Ticker": ticker,
-            "Price": round(price, 2),
-            "Decision": decision,
-            "Bias": bias,
-            "Regime": regime,
-            "Score": score,
-            "RSI": round(rsi, 2) if not pd.isna(rsi) else None,
-            "ADX": round(adx, 2) if not pd.isna(adx) else None,
-            "Reason": reason
-        })
+        decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct)
+        bias = get_bias(price, sma50, sma200, rsi, vwap)
+        regime = get_regime(adx, atr_pct)
 
-    if results:
-        df_results = pd.DataFrame(results)
+        st.subheader(f"{ticker} — {price:.2f}")
 
-        # Sort: GO first, then highest score
-        df_results = df_results.sort_values(
-            by=["Decision", "Score"],
-            ascending=[True, False]
-        )
+        if decision == "GO":
+            st.success("GO ✅")
+        else:
+            st.error("NO GO ⛔")
 
-        # Highlight rows
-        def highlight(row):
-            if row["Decision"] == "GO":
-                return ["background-color: lightgreen"] * len(row)
-            elif row["Decision"] == "CAUTION":
-                return ["background-color: lightyellow"] * len(row)
-            return [""] * len(row)
+        st.write(reason)
 
-        st.subheader("📊 Scan Results (Ranked)")
-        st.dataframe(df_results.style.apply(highlight, axis=1))
+        st.markdown("---")
 
-    else:
-        st.write("No valid results returned.")
+        st.subheader("🧭 Direction")
+        st.write(bias)
+
+        st.subheader("🌎 Regime")
+        st.write(regime)
+
+        st.markdown("---")
+
+        st.subheader("📊 Indicators")
+        st.write(f"RSI: {rsi:.1f}")
+        st.write(f"ADX: {adx:.1f}")
+        st.write(f"ATR %: {atr_pct:.2f}%")
+        st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
+
+# ----------------- AUTO REFRESH -----------------
+
+if auto:
+    time.sleep(60)
+    st.rerun()
