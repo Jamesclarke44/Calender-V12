@@ -8,19 +8,50 @@ from ta.volume import VolumeWeightedAveragePrice
 
 st.set_page_config(page_title="Strategy Finder", layout="centered")
 
-# ----------------- UNIVERSE -----------------
+# ----------------- EXPANDED UNIVERSE -----------------
 
 @st.cache_data
 def load_universe():
     return [
-        "SPY","QQQ","DIA","IWM","VTI","VOO",
-        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA",
-        "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW",
-        "JPM","BAC","GS","MS","C","WFC",
-        "WMT","COST","HD","LOW","NKE","SBUX","MCD",
-        "JNJ","UNH","PFE","MRK","ABBV","TMO",
-        "NEE","DUK","SO","AEP","EXC",
-        "XOM","CVX","COP","EOG","SLB"
+        # Index ETFs
+        "SPY","QQQ","DIA","IWM","VTI","VOO","IVV",
+
+        # Sector ETFs
+        "XLF","XLK","XLE","XLV","XLI","XLP","XLU","XLY","XLB","XLRE","XLC",
+
+        # Volatility / thematic ETFs
+        "ARKK","ARKG","SMH","SOXX","XBI","EEM","GLD","SLV","TLT",
+
+        # Mega / Large Cap Tech
+        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","TSLA",
+        "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW","SNOW","PANW",
+
+        # Financials
+        "JPM","BAC","GS","MS","C","WFC","SCHW","BLK","USB","PNC",
+
+        # Consumer
+        "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT","DG",
+
+        # Healthcare
+        "JNJ","UNH","PFE","MRK","ABBV","TMO","DHR","ABT","BMY","LLY",
+
+        # Energy
+        "XOM","CVX","COP","EOG","SLB","OXY","KMI","PSX",
+
+        # Industrials
+        "CAT","DE","MMM","HON","UPS","UNP","RTX","GE","LMT",
+
+        # Utilities
+        "NEE","DUK","SO","AEP","EXC","XEL","ED","PEG",
+
+        # Telecom
+        "VZ","T","TMUS",
+
+        # Staples
+        "PG","KO","PEP","PM","MO","KHC","CL",
+
+        # REITs
+        "O","PLD","AMT","CCI","EQIX","PSA","SPG","WELL","VTR","DLR"
     ]
 
 # ----------------- INDICATORS -----------------
@@ -48,13 +79,13 @@ def compute_indicators(df):
 
 def detect_regime(adx, rsi, atr_pct):
 
-    if adx < 25 and 40 <= rsi <= 60:
+    if adx < 30 and 35 <= rsi <= 65:
         return "NEUTRAL"
 
-    elif adx >= 25:
+    elif adx >= 30:
         return "TRENDING"
 
-    elif atr_pct > 2.5:
+    elif atr_pct > 3:
         return "VOLATILE"
 
     return "NEUTRAL"
@@ -68,9 +99,9 @@ def suggest_strategies(regime, bb_position):
         if 0.3 < bb_position < 0.7:
             return ["Credit Spread", "Iron Condor", "Calendar Spread"]
         elif bb_position <= 0.3:
-            return ["Bull Put Spread", "Put Credit Spread"]
+            return ["Bull Put Spread"]
         elif bb_position >= 0.7:
-            return ["Bear Call Spread", "Call Credit Spread"]
+            return ["Bear Call Spread"]
 
     elif regime == "TRENDING":
         return ["Pullback Trade", "Breakout", "Debit Spread"]
@@ -89,9 +120,9 @@ def get_bb_position(price, bb_low, bb_high):
 
 # ----------------- UI -----------------
 
-st.title("🧠 Strategy Finder Scanner")
+st.title("🧠 Strategy Finder Scanner (Expanded Universe)")
 
-max_scan = st.slider("Max tickers to scan", 50, 200, 100)
+max_scan = st.slider("Max tickers to scan", 50, 500, 300)
 
 if st.button("Run Scan"):
 
@@ -124,7 +155,6 @@ if st.button("Run Scan"):
             bb_position = get_bb_position(price, bb_low, bb_high)
 
             regime = detect_regime(adx, rsi, atr_pct)
-
             strategies = suggest_strategies(regime, bb_position)
 
             results.append({
@@ -146,8 +176,7 @@ if st.button("Run Scan"):
     if results:
         df_results = pd.DataFrame(results)
 
-        # ---------------- FILTER UI ----------------
-
+        # Filters
         st.subheader("🔎 Filters")
 
         regime_filter = st.selectbox(
@@ -167,7 +196,9 @@ if st.button("Run Scan"):
 
         st.subheader("📊 Strategy Candidates")
 
-        st.dataframe(df_results.sort_values(by="BB Position"), hide_index=True)
+        df_results = df_results.sort_values(by="BB Position")
+
+        st.dataframe(df_results, hide_index=True)
 
     else:
         st.warning("No results found.")
