@@ -42,7 +42,7 @@ def load_universe():
         # Communication
         "DIS","CMCSA","TMUS","VZ","T",
 
-        # Active / Volatile
+        # Volatile names
         "PYPL","SQ","SHOP","UBER","LYFT","SNAP","ROKU",
         "PLTR","COIN","RIOT","MARA","SOFI",
 
@@ -258,7 +258,8 @@ if mode == "Market Scan":
             df_results.insert(0, "Rank", df_results.index + 1)
 
             st.subheader("🎯 All Neutral Setups (Ranked)")
-            st.dataframe(df_results)
+            st.dataframe(df_results, hide_index=True)
+
         else:
             st.warning("No A+ setups found — market likely trending or volatile.")
 
