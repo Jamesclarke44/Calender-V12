@@ -8,7 +8,7 @@ from ta.volume import VolumeWeightedAveragePrice
 
 st.set_page_config(page_title="Strategy Finder", layout="centered")
 
-# ----------------- EXPANDED UNIVERSE -----------------
+# ----------------- UNIVERSE -----------------
 
 @st.cache_data
 def load_universe():
@@ -29,22 +29,38 @@ def load_universe():
         "O","PLD","AMT","CCI","EQIX","PSA","SPG","WELL","VTR","DLR"
     ]
 
-# ----------------- INDICATORS -----------------
+# ----------------- INDICATORS (FIXED) -----------------
 
 def compute_indicators(df):
     df = df.copy()
 
-    df["RSI"] = RSIIndicator(df["Close"]).rsi()
-    df["ADX"] = ADXIndicator(df["High"], df["Low"], df["Close"]).adx()
-    df["ATR"] = AverageTrueRange(df["High"], df["Low"], df["Close"]).average_true_range()
+    # Fix MultiIndex issue
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-    bb = BollingerBands(df["Close"])
+    df = df.dropna()
+
+    # Force 1D Series (CRITICAL FIX)
+    close = df["Close"].squeeze()
+    high = df["High"].squeeze()
+    low = df["Low"].squeeze()
+    volume = df["Volume"].squeeze()
+
+    # Indicators
+    df["RSI"] = RSIIndicator(close=close).rsi()
+    df["ADX"] = ADXIndicator(high=high, low=low, close=close).adx()
+    df["ATR"] = AverageTrueRange(high=high, low=low, close=close).average_true_range()
+
+    bb = BollingerBands(close=close)
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"] = bb.bollinger_lband()
     df["BB_Mid"] = bb.bollinger_mavg()
 
     vwap = VolumeWeightedAveragePrice(
-        df["High"], df["Low"], df["Close"], df["Volume"]
+        high=high,
+        low=low,
+        close=close,
+        volume=volume
     )
     df["VWAP"] = vwap.volume_weighted_average_price()
 
@@ -95,44 +111,49 @@ mode = st.radio("Mode", ["Scan Universe", "Single Ticker"])
 
 if mode == "Single Ticker":
 
-    ticker = st.text_input("Enter Ticker", value="AAPL")
+    ticker = st.text_input("Enter Ticker", value="AAPL").upper()
 
     if st.button("Analyze Ticker"):
 
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        try:
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
-        if df.empty:
-            st.error("No data found.")
-        else:
-            df = compute_indicators(df)
-            last = df.iloc[-1]
+            if df is None or df.empty:
+                st.error("No data found.")
+            else:
+                df = compute_indicators(df)
+                last = df.iloc[-1]
 
-            price = last["Close"]
-            rsi = last["RSI"]
-            adx = last["ADX"]
-            atr = last["ATR"]
+                price = last["Close"]
+                rsi = last["RSI"]
+                adx = last["ADX"]
+                atr = last["ATR"]
 
-            atr_pct = (atr / price) * 100
-            bb_low = last["BB_Low"]
-            bb_high = last["BB_High"]
+                atr_pct = (atr / price) * 100
+                bb_low = last["BB_Low"]
+                bb_high = last["BB_High"]
 
-            bb_position = get_bb_position(price, bb_low, bb_high)
-            regime = detect_regime(adx, rsi, atr_pct)
-            strategies = suggest_strategies(regime, bb_position)
+                bb_position = get_bb_position(price, bb_low, bb_high)
+                regime = detect_regime(adx, rsi, atr_pct)
+                strategies = suggest_strategies(regime, bb_position)
 
-            st.subheader(f"{ticker} Analysis")
+                st.subheader(f"{ticker} Analysis")
 
-            st.write({
-                "Price": round(price,2),
-                "RSI": round(rsi,1),
-                "ADX": round(adx,1),
-                "ATR %": round(atr_pct,2),
-                "BB Position": round(bb_position,2),
-                "Regime": regime,
-                "Strategies": strategies
-            })
+                st.success(f"Regime: {regime}")
+                st.write(f"Strategies: {', '.join(strategies)}")
 
-# ----------------- UNIVERSE SCAN -----------------
+                st.markdown("---")
+
+                st.write(f"Price: {price:.2f}")
+                st.write(f"RSI: {rsi:.1f}")
+                st.write(f"ADX: {adx:.1f}")
+                st.write(f"ATR %: {atr_pct:.2f}")
+                st.write(f"BB Position: {bb_position:.2f}")
+
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+# ----------------- SCANNER -----------------
 
 else:
 
@@ -150,7 +171,7 @@ else:
             try:
                 df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
-                if df.empty or len(df) < 50:
+                if df is None or df.empty or len(df) < 50:
                     continue
 
                 df = compute_indicators(df)
