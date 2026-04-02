@@ -15,19 +15,51 @@ st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
 @st.cache_data
 def load_universe():
     return [
+
+        # ETFs
         "SPY","QQQ","DIA","IWM","VTI",
-        "AAPL","MSFT","NVDA","TSLA","AMZN",
-        "META","GOOGL","NFLX",
-        "XLF","XLV","XLE","XLK"
+        "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU","XLB","XLRE",
+
+        # Mega Caps
+        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","BRK-B",
+        "AVGO","NFLX","AMD","INTC","CRM","ORCL","ADBE","CSCO",
+
+        # Financials
+        "JPM","BAC","GS","MS","C","WFC","SCHW","BLK",
+
+        # Consumer
+        "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT",
+
+        # Healthcare
+        "UNH","LLY","JNJ","PFE","MRK","ABBV","TMO","DHR",
+
+        # Energy
+        "XOM","CVX","COP","SLB","EOG","OXY",
+
+        # Industrials
+        "CAT","DE","GE","HON","BA","UPS","FDX",
+
+        # Communication
+        "DIS","CMCSA","TMUS","VZ","T",
+
+        # High Vol / Active
+        "PYPL","SQ","SHOP","UBER","LYFT","SNAP","ROKU",
+        "PLTR","COIN","RIOT","MARA","SOFI",
+
+        # Canadian
+        "SHOP.TO","RY.TO","TD.TO","ENB.TO","BNS.TO"
     ]
 
 # ----------------- FUNCTIONS -----------------
 
 def fetch_data(ticker):
-    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-    if df.empty:
+    try:
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        if df is None or df.empty:
+            return None
+        return df
+    except:
         return None
-    return df
 
 def compute_indicators(df):
     df = df.copy()
@@ -101,7 +133,7 @@ st.title("📊 Trading Engine Scanner")
 
 mode = st.radio("Mode", ["Single Ticker", "Market Scan"])
 
-# ----------------- SINGLE TICKER MODE -----------------
+# ----------------- SINGLE TICKER -----------------
 
 if mode == "Single Ticker":
 
@@ -150,6 +182,12 @@ if mode == "Single Ticker":
             st.subheader("🌎 Regime")
             st.write(regime)
 
+            st.subheader("📊 Indicators")
+            st.write(f"RSI: {rsi:.1f}")
+            st.write(f"ADX: {adx:.1f}")
+            st.write(f"ATR %: {atr_pct:.2f}%")
+            st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
+
 # ----------------- MARKET SCANNER -----------------
 
 if mode == "Market Scan":
@@ -166,6 +204,10 @@ if mode == "Market Scan":
             df = fetch_data(ticker)
 
             if df is None:
+                continue
+
+            # ✅ SPEED PROTECTION
+            if len(df) < 50:
                 continue
 
             df = compute_indicators(df)
@@ -205,6 +247,8 @@ if mode == "Market Scan":
 
             progress.progress((i + 1) / len(universe))
 
+        # ----------------- OUTPUT -----------------
+
         if results:
             df_results = pd.DataFrame(results)
             df_results = df_results.sort_values(by="Score", ascending=False)
@@ -212,7 +256,7 @@ if mode == "Market Scan":
             st.subheader("🎯 Top Neutral Setups")
             st.dataframe(df_results)
         else:
-            st.write("No setups found.")
+            st.warning("No A+ setups found — market likely trending or volatile.")
 
 # ----------------- AUTO REFRESH -----------------
 
