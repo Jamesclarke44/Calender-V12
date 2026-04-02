@@ -10,7 +10,7 @@ from ta.volume import VolumeWeightedAveragePrice
 
 st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
 
-# ----------------- MARKET UNIVERSE -----------------
+# ----------------- UNIVERSE -----------------
 
 @st.cache_data
 def load_universe():
@@ -42,7 +42,7 @@ def load_universe():
         # Communication
         "DIS","CMCSA","TMUS","VZ","T",
 
-        # High Vol / Active
+        # Active / Volatile
         "PYPL","SQ","SHOP","UBER","LYFT","SNAP","ROKU",
         "PLTR","COIN","RIOT","MARA","SOFI",
 
@@ -50,7 +50,7 @@ def load_universe():
         "SHOP.TO","RY.TO","TD.TO","ENB.TO","BNS.TO"
     ]
 
-# ----------------- FUNCTIONS -----------------
+# ----------------- DATA -----------------
 
 def fetch_data(ticker):
     try:
@@ -188,7 +188,7 @@ if mode == "Single Ticker":
             st.write(f"ATR %: {atr_pct:.2f}%")
             st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
 
-# ----------------- MARKET SCANNER -----------------
+# ----------------- MARKET SCAN -----------------
 
 if mode == "Market Scan":
 
@@ -206,7 +206,7 @@ if mode == "Market Scan":
             if df is None:
                 continue
 
-            # ✅ SPEED PROTECTION
+            # Speed protection
             if len(df) < 50:
                 continue
 
@@ -247,13 +247,17 @@ if mode == "Market Scan":
 
             progress.progress((i + 1) / len(universe))
 
-        # ----------------- OUTPUT -----------------
+        # ---------------- OUTPUT ----------------
 
         if results:
             df_results = pd.DataFrame(results)
-            df_results = df_results.sort_values(by="Score", ascending=False)
 
-            st.subheader("🎯 Top Neutral Setups")
+            df_results = df_results.sort_values(by="Score", ascending=False)
+            df_results = df_results.reset_index(drop=True)
+
+            df_results.insert(0, "Rank", df_results.index + 1)
+
+            st.subheader("🎯 All Neutral Setups (Ranked)")
             st.dataframe(df_results)
         else:
             st.warning("No A+ setups found — market likely trending or volatile.")
