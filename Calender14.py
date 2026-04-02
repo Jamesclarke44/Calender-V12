@@ -59,6 +59,26 @@ def compute_indicators(df):
 
     return df
 
+# ----------------- STRATEGY RECOMMENDATION -----------------
+
+def recommend_strategy(score, rsi):
+
+    if score == 5:
+        return "Iron Condor / Short Strangle"
+
+    if score == 4:
+        if rsi < 45:
+            return "Bull Put Spread"
+        elif rsi > 55:
+            return "Bear Call Spread"
+        else:
+            return "Iron Condor (Wide)"
+
+    if score == 3:
+        return "Credit Spread (Directional Bias)"
+
+    return "No Trade"
+
 # ----------------- A+ DECISION ENGINE -----------------
 
 def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
@@ -72,23 +92,45 @@ def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
     else:
         bb_position = (price - bb_low) / (bb_high - bb_low)
 
-    # A+ criteria
-    if adx > 25:
-        return "NO", "Trending", bb_position, atr_pct, vwap_drift
+    score = 0
+    reasons = []
 
-    if rsi < 40 or rsi > 60:
-        return "NO", "RSI not neutral", bb_position, atr_pct, vwap_drift
+    # ADX
+    if adx <= 25:
+        score += 1
+    else:
+        reasons.append("Trending")
 
-    if vwap_drift > 0.01:
-        return "NO", "Far from VWAP", bb_position, atr_pct, vwap_drift
+    # RSI
+    if 40 <= rsi <= 60:
+        score += 1
+    else:
+        reasons.append("RSI")
 
-    if atr_pct > 2.5:
-        return "NO", "Too volatile", bb_position, atr_pct, vwap_drift
+    # VWAP
+    if vwap_drift <= 0.01:
+        score += 1
+    else:
+        reasons.append("VWAP > 1%")
 
-    if bb_position < 0.4 or bb_position > 0.6:
-        return "NO", "BB not centered", bb_position, atr_pct, vwap_drift
+    # ATR
+    if atr_pct <= 2.5:
+        score += 1
+    else:
+        reasons.append("Volatility")
 
-    return "YES", "A+ Setup", bb_position, atr_pct, vwap_drift
+    # BB
+    if 0.4 <= bb_position <= 0.6:
+        score += 1
+    else:
+        reasons.append("BB")
+
+    if score == 5:
+        return "A+", "Perfect", score, bb_position, atr_pct, vwap_drift
+    elif score >= 3:
+        return "GOOD", ", ".join(reasons), score, bb_position, atr_pct, vwap_drift
+    else:
+        return "BAD", ", ".join(reasons), score, bb_position, atr_pct, vwap_drift
 
 # ----------------- UI -----------------
 
@@ -121,22 +163,28 @@ if mode == "Single Ticker":
             bb_low = last["BB_Low"]
             bb_high = last["BB_High"]
 
-            result, reason, bb_pos, atr_pct, vwap_drift = evaluate_setup(
+            result, reason, score, bb_pos, atr_pct, vwap_drift = evaluate_setup(
                 price, rsi, adx, atr, vwap, bb_low, bb_high
             )
 
+            strategy = recommend_strategy(score, rsi)
+
             st.subheader(f"{ticker} — {price:.2f}")
 
-            if result == "YES":
+            if result == "A+":
                 st.success("GO ✅ A+ Setup")
+            elif result == "GOOD":
+                st.info("GOOD Setup")
             else:
                 st.error(f"NO GO ⛔ — {reason}")
 
             st.write(f"RSI: {rsi:.1f}")
             st.write(f"ADX: {adx:.1f}")
             st.write(f"ATR %: {atr_pct:.2f}")
-            st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
+            st.write(f"VWAP Drift: {vwap_drift:.4f}")
             st.write(f"BB Position: {bb_pos:.2f}")
+            st.write(f"Score: {score}/5")
+            st.write(f"Recommended Strategy: **{strategy}**")
 
 # ----------------- SCANNER -----------------
 
@@ -171,14 +219,18 @@ else:
                 bb_low = last["BB_Low"]
                 bb_high = last["BB_High"]
 
-                result, reason, bb_pos, atr_pct, vwap_drift = evaluate_setup(
+                result, reason, score, bb_pos, atr_pct, vwap_drift = evaluate_setup(
                     price, rsi, adx, atr, vwap, bb_low, bb_high
                 )
+
+                strategy = recommend_strategy(score, rsi)
 
                 results.append({
                     "Ticker": ticker,
                     "Price": round(price, 2),
-                    "A+ Setup": result,
+                    "Grade": result,
+                    "Score": score,
+                    "Strategy": strategy,
                     "Reason": reason,
                     "RSI": round(rsi, 1),
                     "ADX": round(adx, 1),
@@ -195,11 +247,13 @@ else:
         if results:
             df_results = pd.DataFrame(results)
 
-            st.subheader("📊 All Candidates")
+            df_results = df_results.sort_values(by="Score", ascending=False)
+
+            st.subheader("📊 All Results")
             st.dataframe(df_results, hide_index=True)
 
-            st.subheader("🎯 A+ Setups Only")
-            st.dataframe(df_results[df_results["A+ Setup"] == "YES"], hide_index=True)
+            st.subheader("🎯 A+ Setups")
+            st.dataframe(df_results[df_results["Grade"] == "A+"], hide_index=True)
 
         else:
             st.warning("No results found.")
