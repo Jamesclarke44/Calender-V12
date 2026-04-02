@@ -74,7 +74,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
     strategies = []
     risk_level = None
 
-    # ---------- LOW RISK SETUPS (CALENDARS) ----------
+    # LOW RISK (Calendars)
     if (
         40 <= rsi <= 60 and
         adx < 25 and
@@ -82,20 +82,20 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
         0.4 <= bb_position <= 0.6 and
         atr_pct <= 2.5
     ):
-        strategies.append("Single Calendar")
-        strategies.append("Double Calendar")
-        strategies.append("Ratio Calendar")
+        strategies += ["Single Calendar", "Double Calendar", "Ratio Calendar"]
         risk_level = "LOW RISK"
 
-    # ---------- MODERATE RISK SETUPS ----------
+    # MODERATE RISK
     if (
         adx < 30 and
         vwap_drift <= 0.015
     ):
-        strategies.append("Wide Iron Condor")
-        strategies.append("Wide Credit Spread")
-        strategies.append("Broken Wing Butterfly")
-        strategies.append("Jade Lizard")
+        strategies += [
+            "Wide Iron Condor",
+            "Wide Credit Spread",
+            "Broken Wing Butterfly",
+            "Jade Lizard"
+        ]
         risk_level = risk_level or "MODERATE RISK"
 
     return risk_level, strategies, bb_position, atr_pct, vwap_drift
@@ -103,6 +103,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
 # ----------------- SCANNER -----------------
 
 def scan_universe(tickers):
+
     results = []
 
     for ticker in tickers:
@@ -159,7 +160,8 @@ if mode == "Single Ticker":
 
     if st.button("Analyze"):
 
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        with st.spinner("Analyzing... ⏳"):
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
         if df is None or df.empty:
             st.error("No data found")
@@ -195,6 +197,7 @@ if mode == "Single Ticker":
             st.write(f"BB Position: {bb_pos:.2f}")
 
             st.subheader("Recommended Strategies")
+
             if strategies:
                 for s in strategies:
                     st.write(f"• {s}")
@@ -207,8 +210,14 @@ if mode == "Scan Universe":
 
     if st.button("Run Scan"):
 
-        tickers = load_universe()
-        df_results = scan_universe(tickers)
+        with st.spinner("Scanning market... please wait ⏳"):
+
+            tickers = load_universe()
+
+            # Optional: limit for testing speed
+            # tickers = tickers[:20]
+
+            df_results = scan_universe(tickers)
 
         if df_results.empty:
             st.warning("❌ No opportunities found")
@@ -219,14 +228,14 @@ if mode == "Scan Universe":
             st.subheader("🟢 Low Risk Opportunities")
 
             if not low_risk_df.empty:
-                st.dataframe(low_risk_df, hide_index=True)
+                st.dataframe(low_risk_df, use_container_width=True)
             else:
                 st.info("No low-risk (calendar) setups found.")
 
             st.subheader("🟡 Moderate Risk Opportunities")
 
             if not moderate_df.empty:
-                st.dataframe(moderate_df, hide_index=True)
+                st.dataframe(moderate_df, use_container_width=True)
             else:
                 st.info("No moderate-risk setups found.")
 
