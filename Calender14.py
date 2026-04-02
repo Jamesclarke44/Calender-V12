@@ -8,25 +8,24 @@ from ta.volume import VolumeWeightedAveragePrice
 
 st.set_page_config(page_title="Strategy Finder", layout="centered")
 
-# ----------------- UNIVERSE (EXPANDED) -----------------
+# ----------------- UNIVERSE (FIXED) -----------------
 
 @st.cache_data
 def load_universe():
-    # S&P 500 from Wikipedia
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    table = pd.read_html(url)[0]
-    sp500 = table["Symbol"].tolist()
+    # Stable S&P 500 CSV source (no scraping)
+    url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
+    
+    df = pd.read_csv(url)
+    sp500 = df["Symbol"].tolist()
 
-    # Add major ETFs
+    # ETFs
     etfs = [
         "SPY","QQQ","IWM","DIA","VTI","VOO","IVV",
         "XLF","XLK","XLE","XLV","XLI","XLP","XLU","XLY","XLB","XLRE","XLC",
         "ARKK","ARKG","SMH","SOXX","XBI","EEM","GLD","SLV","TLT"
     ]
 
-    # Combine and remove duplicates
     universe = list(set(sp500 + etfs))
-
     return universe
 
 # ----------------- INDICATORS -----------------
@@ -74,7 +73,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
     strategies = []
     risk_level = None
 
-    # LOW RISK
+    # LOW RISK (A+)
     if (
         40 <= rsi <= 60 and
         adx < 25 and
