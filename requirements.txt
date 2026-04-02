@@ -4,5 +4,5 @@ pandas
 numpy
 matplotlib
 ta
-1xm1
-htm151ib
+lxml
+html5lib
