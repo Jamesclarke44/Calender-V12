@@ -8,26 +8,26 @@ from ta.volume import VolumeWeightedAveragePrice
 
 st.set_page_config(page_title="Strategy Finder", layout="centered")
 
-# ----------------- UNIVERSE -----------------
+# ----------------- UNIVERSE (EXPANDED) -----------------
 
 @st.cache_data
 def load_universe():
-    return [
-        "SPY","QQQ","DIA","IWM","VTI","VOO","IVV",
+    # S&P 500 from Wikipedia
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    table = pd.read_html(url)[0]
+    sp500 = table["Symbol"].tolist()
+
+    # Add major ETFs
+    etfs = [
+        "SPY","QQQ","IWM","DIA","VTI","VOO","IVV",
         "XLF","XLK","XLE","XLV","XLI","XLP","XLU","XLY","XLB","XLRE","XLC",
-        "ARKK","ARKG","SMH","SOXX","XBI","EEM","GLD","SLV","TLT",
-        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","TSLA",
-        "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW","SNOW","PANW",
-        "JPM","BAC","GS","MS","C","WFC","SCHW","BLK","USB","PNC",
-        "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT","DG",
-        "JNJ","UNH","PFE","MRK","ABBV","TMO","DHR","ABT","BMY","LLY",
-        "XOM","CVX","COP","EOG","SLB","OXY","KMI","PSX",
-        "CAT","DE","MMM","HON","UPS","UNP","RTX","GE","LMT",
-        "NEE","DUK","SO","AEP","EXC","XEL","ED","PEG",
-        "VZ","T","TMUS",
-        "PG","KO","PEP","PM","MO","KHC","CL",
-        "O","PLD","AMT","CCI","EQIX","PSA","SPG","WELL","VTR","DLR"
+        "ARKK","ARKG","SMH","SOXX","XBI","EEM","GLD","SLV","TLT"
     ]
+
+    # Combine and remove duplicates
+    universe = list(set(sp500 + etfs))
+
+    return universe
 
 # ----------------- INDICATORS -----------------
 
@@ -74,7 +74,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
     strategies = []
     risk_level = None
 
-    # LOW RISK (Calendars)
+    # LOW RISK
     if (
         40 <= rsi <= 60 and
         adx < 25 and
@@ -109,7 +109,6 @@ def scan_universe(tickers, progress_bar, status_text, counter_text):
 
     for i, ticker in enumerate(tickers):
 
-        # Live UI updates
         counter_text.markdown(f"### Scanned: {i+1} / {total}")
         status_text.text(f"Scanning {ticker}")
 
@@ -150,7 +149,6 @@ def scan_universe(tickers, progress_bar, status_text, counter_text):
         except Exception:
             continue
 
-        # Update progress bar
         progress_bar.progress((i + 1) / total)
 
     status_text.text("Scan complete ✅")
@@ -242,7 +240,7 @@ if mode == "Scan Universe":
             if not low_risk_df.empty:
                 st.dataframe(low_risk_df, use_container_width=True)
             else:
-                st.info("No low-risk (calendar) setups found.")
+                st.info("No low-risk setups found.")
 
             st.subheader("🟡 Moderate Risk Opportunities")
 
@@ -253,4 +251,3 @@ if mode == "Scan Universe":
 
             if low_risk_df.empty and moderate_df.empty:
                 st.warning("❌ No trade opportunities found based on current criteria.")
-                
