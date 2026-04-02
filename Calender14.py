@@ -6,20 +6,19 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import VolumeWeightedAveragePrice
 
-st.set_page_config(page_title="Trading Engine Scanner + Strategy", layout="centered")
+st.set_page_config(page_title="Strategy Finder", layout="centered")
 
 # ----------------- UNIVERSE -----------------
 
 @st.cache_data
 def load_universe():
     return [
-        "SPY","QQQ","DIA","IWM","VTI","VOO","IVV",
-        "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU",
+        "SPY","QQQ","DIA","IWM","VTI","VOO",
         "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA",
         "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW",
         "JPM","BAC","GS","MS","C","WFC",
         "WMT","COST","HD","LOW","NKE","SBUX","MCD",
-        "JNJ","UNH","PFE","MRK","ABBV","TMO","DHR",
+        "JNJ","UNH","PFE","MRK","ABBV","TMO",
         "NEE","DUK","SO","AEP","EXC",
         "XOM","CVX","COP","EOG","SLB"
     ]
@@ -45,58 +44,54 @@ def compute_indicators(df):
 
     return df
 
-# ----------------- STRATEGY LOGIC -----------------
+# ----------------- REGIME DETECTION -----------------
 
-def strategy_setup(last):
+def detect_regime(adx, rsi, atr_pct):
 
-    price = last["Close"]
-    rsi = last["RSI"]
-    adx = last["ADX"]
-    bb_high = last["BB_High"]
-    bb_low = last["BB_Low"]
-    bb_mid = last["BB_Mid"]
-    vwap = last["VWAP"]
-    atr = last["ATR"]
+    if adx < 25 and 40 <= rsi <= 60:
+        return "NEUTRAL"
 
-    # Defaults
-    setup = "WAIT"
-    entry = None
-    stop = None
-    target = None
-    confidence = 0
+    elif adx >= 25:
+        return "TRENDING"
 
-    # Range condition
-    if adx < 25:
+    elif atr_pct > 2.5:
+        return "VOLATILE"
 
-        # ---------------- LONG ----------------
-        if price <= bb_low and rsi < 45:
+    return "NEUTRAL"
 
-            setup = "LONG"
+# ----------------- STRATEGY MAPPING -----------------
 
-            entry = price
-            stop = price - (1.2 * atr)
-            target = bb_mid if price < bb_mid else vwap
+def suggest_strategies(regime, bb_position):
 
-            confidence = (50 - rsi) + (bb_mid - price)
+    if regime == "NEUTRAL":
 
-        # ---------------- SHORT ----------------
-        elif price >= bb_high and rsi > 55:
+        if 0.3 < bb_position < 0.7:
+            return ["Credit Spread", "Iron Condor", "Calendar Spread"]
+        elif bb_position <= 0.3:
+            return ["Bull Put Spread", "Put Credit Spread"]
+        elif bb_position >= 0.7:
+            return ["Bear Call Spread", "Call Credit Spread"]
 
-            setup = "SHORT"
+    elif regime == "TRENDING":
+        return ["Pullback Trade", "Breakout", "Debit Spread"]
 
-            entry = price
-            stop = price + (1.2 * atr)
-            target = bb_mid if price > bb_mid else vwap
+    elif regime == "VOLATILE":
+        return ["Straddle", "Strangle", "Long Options"]
 
-            confidence = (rsi - 50) + (price - bb_mid)
+    return ["Watch"]
 
-    return setup, entry, stop, target, confidence
+# ----------------- BB POSITION -----------------
+
+def get_bb_position(price, bb_low, bb_high):
+    if bb_high - bb_low == 0:
+        return 0.5
+    return (price - bb_low) / (bb_high - bb_low)
 
 # ----------------- UI -----------------
 
-st.title("📊 Trading Scanner + Strategy Engine")
+st.title("🧠 Strategy Finder Scanner")
 
-max_scan = st.slider("Max tickers to scan", 50, 300, 150)
+max_scan = st.slider("Max tickers to scan", 50, 200, 100)
 
 if st.button("Run Scan"):
 
@@ -118,22 +113,29 @@ if st.button("Run Scan"):
             last = df.iloc[-1]
 
             price = last["Close"]
+            rsi = last["RSI"]
+            adx = last["ADX"]
+            atr = last["ATR"]
 
-            # Strategy
-            setup, entry, stop, target, confidence = strategy_setup(last)
+            atr_pct = (atr / price) * 100
+            bb_low = last["BB_Low"]
+            bb_high = last["BB_High"]
 
-            # Filter: only show meaningful setups
-            if setup == "WAIT":
-                continue
+            bb_position = get_bb_position(price, bb_low, bb_high)
+
+            regime = detect_regime(adx, rsi, atr_pct)
+
+            strategies = suggest_strategies(regime, bb_position)
 
             results.append({
                 "Ticker": ticker,
-                "Setup": setup,
                 "Price": round(price, 2),
-                "Entry": round(entry, 2) if entry else None,
-                "Stop": round(stop, 2) if stop else None,
-                "Target": round(target, 2) if target else None,
-                "Confidence": round(confidence, 2)
+                "Regime": regime,
+                "Strategies": ", ".join(strategies),
+                "RSI": round(rsi, 1),
+                "ADX": round(adx, 1),
+                "BB Position": round(bb_position, 2),
+                "ATR %": round(atr_pct, 2)
             })
 
         except:
@@ -143,11 +145,29 @@ if st.button("Run Scan"):
 
     if results:
         df_results = pd.DataFrame(results)
-        df_results = df_results.sort_values(by="Confidence", ascending=False)
-        df_results = df_results.reset_index(drop=True)
-        df_results.insert(0, "Rank", df_results.index + 1)
 
-        st.subheader("🎯 Active Trade Setups")
-        st.dataframe(df_results, hide_index=True)
+        # ---------------- FILTER UI ----------------
+
+        st.subheader("🔎 Filters")
+
+        regime_filter = st.selectbox(
+            "Filter by Regime",
+            ["ALL", "NEUTRAL", "TRENDING", "VOLATILE"]
+        )
+
+        strategy_filter = st.text_input("Search Strategy (e.g. Iron Condor)")
+
+        if regime_filter != "ALL":
+            df_results = df_results[df_results["Regime"] == regime_filter]
+
+        if strategy_filter:
+            df_results = df_results[
+                df_results["Strategies"].str.contains(strategy_filter, case=False)
+            ]
+
+        st.subheader("📊 Strategy Candidates")
+
+        st.dataframe(df_results.sort_values(by="BB Position"), hide_index=True)
+
     else:
-        st.warning("No setups found.")
+        st.warning("No results found.")
