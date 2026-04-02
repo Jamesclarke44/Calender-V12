@@ -1,5 +1,4 @@
 import streamlit as st
-import math
 import time
 import pandas as pd
 import yfinance as yf
@@ -29,6 +28,14 @@ def load_universe():
         "PLTR","COIN","RIOT","MARA","SOFI",
         "SHOP.TO","RY.TO","TD.TO","ENB.TO","BNS.TO"
     ]
+
+@st.cache_data
+def load_sp500():
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    table = pd.read_html(url)[0]
+    tickers = table["Symbol"].tolist()
+    tickers = [t.replace(".", "-") for t in tickers]
+    return tickers
 
 # ----------------- DATA -----------------
 
@@ -96,24 +103,20 @@ def get_regime(adx, atr_pct):
     return "TRENDING"
 
 def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
-    
-    # ADX filter
+
     if adx > 25:
         return "NO GO", "Trending market"
 
-    # RSI filter
     if rsi < 40 or rsi > 60:
         return "NO GO", "Momentum not neutral"
 
-    # VWAP filter
     if vwap_drift > 0.01:
         return "NO GO", "Too far from VWAP"
 
-    # Volatility filter
     if atr_pct > 2.5:
         return "NO GO", "Volatility too high"
 
-    # ✅ Bollinger Band Position Filter
+    # ✅ Bollinger Band Rule (40–60%)
     if bb_position < 0.4 or bb_position > 0.6:
         return "NO GO", "Price not centered in Bollinger Bands"
 
@@ -124,6 +127,12 @@ def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
 st.title("📊 Trading Engine Scanner")
 
 mode = st.radio("Mode", ["Single Ticker", "Market Scan"])
+
+# ✅ Universe Toggle
+universe_mode = st.radio(
+    "Select Universe",
+    ["Custom Universe", "S&P 500", "Both"]
+)
 
 # ----------------- SINGLE TICKER -----------------
 
@@ -155,7 +164,6 @@ if mode == "Single Ticker":
             atr_pct = (atr / price) * 100
             vwap_drift = abs(price - vwap) / price
 
-            # Bollinger Position
             bb_range = last["BB_High"] - last["BB_Low"]
             bb_position = (price - last["BB_Low"]) / bb_range
 
@@ -191,9 +199,21 @@ if mode == "Market Scan":
 
     if st.button("Run Market Scan"):
 
-        universe = load_universe()
-        results = []
+        # ✅ Universe selection logic
+        if universe_mode == "Custom Universe":
+            universe = load_universe()
 
+        elif universe_mode == "S&P 500":
+            universe = load_sp500()
+
+        else:
+            universe = list(set(load_universe() + load_sp500()))
+
+        # Optional speed control
+        scan_limit = st.slider("Scan Limit", 50, 500, 200)
+        universe = universe[:scan_limit]
+
+        results = []
         progress = st.progress(0)
 
         for i, ticker in enumerate(universe):
