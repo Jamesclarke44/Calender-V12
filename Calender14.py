@@ -1,5 +1,4 @@
 import streamlit as st
-import math
 import time
 import pandas as pd
 import yfinance as yf
@@ -15,44 +14,39 @@ st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
 @st.cache_data
 def load_universe():
     return [
-        "SPY","QQQ","DIA","IWM","VTI",
-        "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU","XLB","XLRE",
-        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","BRK-B",
-        "AVGO","NFLX","AMD","INTC","CRM","ORCL","ADBE","CSCO",
-        "JPM","BAC","GS","MS","C","WFC","SCHW","BLK",
-        "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT",
-        "UNH","LLY","JNJ","PFE","MRK","ABBV","TMO","DHR",
-        "XOM","CVX","COP","SLB","EOG","OXY",
-        "CAT","DE","GE","HON","BA","UPS","FDX",
-        "DIS","CMCSA","TMUS","VZ","T",
-        "PYPL","SQ","SHOP","UBER","LYFT","SNAP","ROKU",
-        "PLTR","COIN","RIOT","MARA","SOFI",
-        "SHOP.TO","RY.TO","TD.TO","ENB.TO","BNS.TO"
+        "SPY","QQQ","DIA","IWM","VTI","VOO","IVV",
+
+        "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU","XLB","XLRE","XLC",
+
+        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","AVGO","NFLX",
+        "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW","PANW","SNOW",
+
+        "JPM","BAC","GS","MS","C","WFC","SCHW","BLK","USB","PNC",
+
+        "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT","PG","KO","PEP",
+
+        "JNJ","UNH","PFE","MRK","ABBV","TMO","DHR","ABT","MDT","BMY",
+
+        "NEE","DUK","SO","AEP","EXC","XEL","ED","PEG","ES",
+
+        "O","PLD","SPG","AMT","CCI","EQIX","PSA","WELL","VTR",
+
+        "HON","UPS","UNP","CAT","DE","MMM","EMR","ITW","GD",
+
+        "VZ","T","TMUS",
+
+        "XOM","CVX","COP","EOG","SLB","OXY",
+
+        "SHOP.TO","RY.TO","TD.TO","BNS.TO","BMO.TO","ENB.TO","TRP.TO"
     ]
 
-# ----------------- S&P 500 -----------------
+# ----------------- UTIL -----------------
 
-@st.cache_data
-def load_sp500():
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tables = pd.read_html(url)
-    table = tables[0]
-
-    tickers = table["Symbol"].tolist()
-    tickers = [t.replace(".", "-") for t in tickers]
-
-    return tickers
+def chunk_list(lst, size=50):
+    for i in range(0, len(lst), size):
+        yield lst[i:i + size]
 
 # ----------------- DATA -----------------
-
-def fetch_data(ticker):
-    try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False, threads=False)
-        if df is None or df.empty:
-            return None
-        return df
-    except:
-        return None
 
 def compute_indicators(df):
     df = df.copy()
@@ -80,7 +74,48 @@ def compute_indicators(df):
 
     return df
 
-# ----------------- LOGIC -----------------
+# ----------------- PRE-FILTER -----------------
+
+def pre_filter(price, rsi, adx, atr_pct):
+    if price < 10:
+        return False
+
+    if pd.isna(rsi) or pd.isna(adx):
+        return False
+
+    if adx > 30:
+        return False
+
+    if rsi < 30 or rsi > 70:
+        return False
+
+    if atr_pct < 0.3 or atr_pct > 5:
+        return False
+
+    return True
+
+# ----------------- DECISION ENGINE -----------------
+
+def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
+
+    if adx > 25:
+        return "NO GO", "Trending market"
+
+    if rsi < 40 or rsi > 60:
+        return "NO GO", "Momentum not neutral"
+
+    if vwap_drift > 0.01:
+        return "NO GO", "Too far from VWAP"
+
+    if atr_pct > 2.5:
+        return "NO GO", "Volatility too high"
+
+    if bb_position < 0.4 or bb_position > 0.6:
+        return "NO GO", "Price not centered in Bollinger Bands"
+
+    return "GO", "All conditions aligned"
+
+# ----------------- BIAS -----------------
 
 def get_bias(price, sma50, sma200, rsi, vwap):
     score = 0
@@ -101,188 +136,101 @@ def get_bias(price, sma50, sma200, rsi, vwap):
         return "BEARISH"
     return "NEUTRAL"
 
-def get_regime(adx, atr_pct):
-    if adx < 20 and atr_pct < 2:
-        return "RANGE (IDEAL)"
-    elif adx < 25:
-        return "TRANSITION"
-    return "TRENDING"
-
-def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
-
-    if adx > 25:
-        return "NO GO", "Trending market"
-
-    if rsi < 40 or rsi > 60:
-        return "NO GO", "Momentum not neutral"
-
-    if vwap_drift > 0.01:
-        return "NO GO", "Too far from VWAP"
-
-    if atr_pct > 2.5:
-        return "NO GO", "Volatility too high"
-
-    # Bollinger Band neutrality (40–60%)
-    if bb_position < 0.4 or bb_position > 0.6:
-        return "NO GO", "Price not centered in Bollinger Bands"
-
-    return "GO", "All conditions aligned"
-
 # ----------------- UI -----------------
 
-st.title("📊 Trading Engine Scanner")
+st.title("📊 Trading Engine Scanner (Scaled)")
 
-mode = st.radio("Mode", ["Single Ticker", "Market Scan"])
+max_scan = st.slider("Max tickers to scan", 50, 600, 300)
 
-# ----------------- SINGLE -----------------
+if st.button("Run Scan"):
 
-if mode == "Single Ticker":
+    universe = load_universe()[:max_scan]
 
-    ticker = st.text_input("Ticker", value="SPY").upper()
-    auto = st.checkbox("Auto Refresh (60s)", value=True)
-    run = st.button("Run") if not auto else True
+    results = []
+    progress = st.progress(0)
 
-    if run and ticker:
+    batch_size = 50
+    batches = list(chunk_list(universe, batch_size))
 
-        df = fetch_data(ticker)
+    for b_idx, batch in enumerate(batches):
 
-        if df is None:
-            st.error("Invalid ticker")
-        else:
-            df = compute_indicators(df)
-            last = df.iloc[-1]
+        data = yf.download(
+            tickers=batch,
+            period="6mo",
+            interval="1d",
+            group_by="ticker",
+            threads=True,
+            progress=False
+        )
 
-            price = last["Close"]
-            rsi = last["RSI"]
-            adx = last["ADX"]
-            atr = last["ATR"]
-            vwap = last["VWAP"]
+        for ticker in batch:
 
-            sma50 = last["SMA50"]
-            sma200 = last["SMA200"]
+            try:
+                df = data[ticker].dropna()
 
-            atr_pct = (atr / price) * 100
-            vwap_drift = abs(price - vwap) / price
+                if df.empty or len(df) < 50:
+                    continue
 
-            bb_range = last["BB_High"] - last["BB_Low"]
+                df = compute_indicators(df)
+                last = df.iloc[-1]
 
-            if bb_range == 0 or pd.isna(bb_range):
-                bb_position = 0.5
-            else:
-                bb_position = (price - last["BB_Low"]) / bb_range
+                price = last["Close"]
+                rsi = last["RSI"]
+                adx = last["ADX"]
+                atr = last["ATR"]
+                vwap = last["VWAP"]
 
-            decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
-            bias = get_bias(price, sma50, sma200, rsi, vwap)
-            regime = get_regime(adx, atr_pct)
+                atr_pct = (atr / price) * 100
+                vwap_drift = abs(price - vwap) / price
 
-            st.subheader(f"{ticker} — {price:.2f}")
+                # -------- PRE FILTER --------
+                if not pre_filter(price, rsi, adx, atr_pct):
+                    continue
 
-            if decision == "GO":
-                st.success("GO ✅")
-            else:
-                st.error("NO GO ⛔")
+                # -------- BB POSITION --------
+                bb_range = last["BB_High"] - last["BB_Low"]
 
-            st.write(reason)
+                if bb_range == 0 or pd.isna(bb_range):
+                    bb_position = 0.5
+                else:
+                    bb_position = (price - last["BB_Low"]) / bb_range
 
-            st.subheader("🧭 Direction")
-            st.write(bias)
+                # -------- DECISION --------
+                decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
 
-            st.subheader("🌎 Regime")
-            st.write(regime)
+                if decision == "GO":
 
-            st.subheader("📊 Indicators")
-            st.write(f"RSI: {rsi:.1f}")
-            st.write(f"ADX: {adx:.1f}")
-            st.write(f"ATR %: {atr_pct:.2f}%")
-            st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
-            st.write(f"BB Position: {bb_position:.2f}")
+                    score = (
+                        (25 - adx) +
+                        (1 - abs(rsi - 50) / 50) * 10 +
+                        (1 - vwap_drift) * 10 +
+                        (1 - abs(bb_position - 0.5)) * 10
+                    )
 
-# ----------------- MARKET SCAN -----------------
+                    results.append({
+                        "Ticker": ticker,
+                        "Price": round(price, 2),
+                        "RSI": round(rsi, 1),
+                        "ADX": round(adx, 1),
+                        "ATR %": round(atr_pct, 2),
+                        "VWAP Drift": round(vwap_drift, 4),
+                        "BB Position": round(bb_position, 2),
+                        "Score": round(score, 2)
+                    })
 
-if mode == "Market Scan":
-
-    universe_choice = st.selectbox(
-        "Universe",
-        ["Custom Universe", "S&P 500"]
-    )
-
-    if st.button("Run Market Scan"):
-
-        if universe_choice == "S&P 500":
-            universe = load_sp500()
-        else:
-            universe = load_universe()
-
-        results = []
-        progress = st.progress(0)
-
-        for i, ticker in enumerate(universe):
-
-            df = fetch_data(ticker)
-
-            if df is None or len(df) < 50:
+            except:
                 continue
 
-            df = compute_indicators(df)
-            last = df.iloc[-1]
+        progress.progress((b_idx + 1) / len(batches))
 
-            price = last["Close"]
-            rsi = last["RSI"]
-            adx = last["ADX"]
-            atr = last["ATR"]
-            vwap = last["VWAP"]
+    if results:
+        df_results = pd.DataFrame(results)
+        df_results = df_results.sort_values(by="Score", ascending=False)
+        df_results = df_results.reset_index(drop=True)
+        df_results.insert(0, "Rank", df_results.index + 1)
 
-            if pd.isna(adx) or pd.isna(rsi):
-                continue
+        st.subheader("🎯 Neutral Setups (Ranked)")
+        st.dataframe(df_results, hide_index=True)
 
-            atr_pct = (atr / price) * 100
-            vwap_drift = abs(price - vwap) / price
-
-            bb_range = last["BB_High"] - last["BB_Low"]
-
-            if bb_range == 0 or pd.isna(bb_range):
-                bb_position = 0.5
-            else:
-                bb_position = (price - last["BB_Low"]) / bb_range
-
-            decision, _ = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
-
-            if decision == "GO":
-
-                score = (
-                    (25 - adx) +
-                    (1 - abs(rsi - 50) / 50) * 10 +
-                    (1 - vwap_drift) * 10 +
-                    (1 - abs(bb_position - 0.5)) * 10
-                )
-
-                results.append({
-                    "Ticker": ticker,
-                    "Price": round(price, 2),
-                    "RSI": round(rsi, 1),
-                    "ADX": round(adx, 1),
-                    "ATR %": round(atr_pct, 2),
-                    "VWAP Drift": round(vwap_drift, 4),
-                    "BB Position": round(bb_position, 2),
-                    "Score": round(score, 2)
-                })
-
-            progress.progress((i + 1) / len(universe))
-
-        if results:
-            df_results = pd.DataFrame(results)
-            df_results = df_results.sort_values(by="Score", ascending=False)
-            df_results = df_results.reset_index(drop=True)
-            df_results.insert(0, "Rank", df_results.index + 1)
-
-            st.subheader("🎯 Neutral Setups (Ranked)")
-            st.dataframe(df_results, hide_index=True)
-
-        else:
-            st.warning("No setups found.")
-
-# ----------------- AUTO REFRESH -----------------
-
-if mode == "Single Ticker" and auto:
-    time.sleep(60)
-    st.rerun()
+    else:
+        st.warning("No setups found.")
