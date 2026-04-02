@@ -8,25 +8,22 @@ from ta.volume import VolumeWeightedAveragePrice
 
 st.set_page_config(page_title="Strategy Finder", layout="centered")
 
-# ----------------- UNIVERSE (FIXED) -----------------
+# ----------------- UNIVERSE -----------------
 
 @st.cache_data
 def load_universe():
-    # Stable S&P 500 CSV source (no scraping)
     url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
     
     df = pd.read_csv(url)
     sp500 = df["Symbol"].tolist()
 
-    # ETFs
     etfs = [
         "SPY","QQQ","IWM","DIA","VTI","VOO","IVV",
         "XLF","XLK","XLE","XLV","XLI","XLP","XLU","XLY","XLB","XLRE","XLC",
         "ARKK","ARKG","SMH","SOXX","XBI","EEM","GLD","SLV","TLT"
     ]
 
-    universe = list(set(sp500 + etfs))
-    return universe
+    return list(set(sp500 + etfs))
 
 # ----------------- INDICATORS -----------------
 
@@ -58,7 +55,7 @@ def compute_indicators(df):
 
     return df
 
-# ----------------- STRATEGY LOGIC -----------------
+# ----------------- STRATEGY -----------------
 
 def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
 
@@ -73,7 +70,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
     strategies = []
     risk_level = None
 
-    # LOW RISK (A+)
+    # LOW RISK
     if (
         40 <= rsi <= 60 and
         adx < 25 and
@@ -151,7 +148,6 @@ def scan_universe(tickers, progress_bar, status_text, counter_text):
         progress_bar.progress((i + 1) / total)
 
     status_text.text("Scan complete ✅")
-
     return pd.DataFrame(results)
 
 # ----------------- UI -----------------
@@ -159,6 +155,91 @@ def scan_universe(tickers, progress_bar, status_text, counter_text):
 st.title("🧠 Strategy Finder")
 
 mode = st.radio("Mode", ["Scan Universe", "Single Ticker"])
+
+# ----------------- SCAN MODE -----------------
+
+if mode == "Scan Universe":
+
+    if st.button("Run Scan"):
+
+        tickers = load_universe()
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        counter_text = st.empty()
+
+        with st.spinner("Scanning market..."):
+
+            df_results = scan_universe(tickers, progress_bar, status_text, counter_text)
+
+        if df_results.empty:
+            st.warning("❌ No opportunities found")
+        else:
+            low_risk_df = df_results[df_results["Risk Level"] == "LOW RISK"].copy()
+
+            st.subheader("🟢 Low Risk Opportunities")
+
+            if not low_risk_df.empty:
+                # Sort by ATR % (lower = better stability)
+                low_risk_df = low_risk_df.sort_values(by="ATR %")
+
+                st.dataframe(low_risk_df, use_container_width=True)
+
+                # Store for top 5 selection
+                st.session_state["low_risk_df"] = low_risk_df
+
+            else:
+                st.info("No low-risk setups found.")
+
+    # ----------------- TOP 5 BUTTON -----------------
+
+    if "low_risk_df" in st.session_state:
+
+        if st.button("Show Top 5 Low Risk Details"):
+
+            top5 = st.session_state["low_risk_df"].head(5)
+
+            st.subheader("⭐ Top 5 Low Risk Setups (Detailed)")
+
+            for _, row in top5.iterrows():
+
+                st.markdown(f"## {row['Ticker']}")
+
+                df = yf.download(row["Ticker"], period="6mo", interval="1d", progress=False)
+
+                if df is None or df.empty:
+                    continue
+
+                df = compute_indicators(df)
+                last = df.iloc[-1]
+
+                price = last["Close"]
+                rsi = last["RSI"]
+                adx = last["ADX"]
+                atr = last["ATR"]
+                vwap = last["VWAP"]
+                bb_low = last["BB_Low"]
+                bb_high = last["BB_High"]
+
+                risk_level, strategies, bb_pos, atr_pct, vwap_drift = classify_strategies(
+                    price, rsi, adx, atr, vwap, bb_low, bb_high
+                )
+
+                st.write(f"**Price:** {price:.2f}")
+                st.write(f"**RSI:** {rsi:.1f}")
+                st.write(f"**ADX:** {adx:.1f}")
+                st.write(f"**ATR %:** {atr_pct:.2f}")
+                st.write(f"**VWAP Drift %:** {vwap_drift*100:.2f}")
+                st.write(f"**BB Position:** {bb_pos:.2f}")
+
+                st.write("**Strategies:**")
+                if strategies:
+                    for s in strategies:
+                        st.write(f"- {s}")
+                else:
+                    st.write("No strategies found")
+
+                st.divider()
 
 # ----------------- SINGLE TICKER -----------------
 
@@ -168,8 +249,7 @@ if mode == "Single Ticker":
 
     if st.button("Analyze"):
 
-        with st.spinner("Analyzing... ⏳"):
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
         if df is None or df.empty:
             st.error("No data found")
@@ -211,42 +291,3 @@ if mode == "Single Ticker":
                     st.write(f"• {s}")
             else:
                 st.write("No suitable strategies found")
-
-# ----------------- UNIVERSE SCAN -----------------
-
-if mode == "Scan Universe":
-
-    if st.button("Run Scan"):
-
-        tickers = load_universe()
-
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        counter_text = st.empty()
-
-        with st.spinner("Scanning market..."):
-
-            df_results = scan_universe(tickers, progress_bar, status_text, counter_text)
-
-        if df_results.empty:
-            st.warning("❌ No opportunities found")
-        else:
-            low_risk_df = df_results[df_results["Risk Level"] == "LOW RISK"]
-            moderate_df = df_results[df_results["Risk Level"] == "MODERATE RISK"]
-
-            st.subheader("🟢 Low Risk Opportunities")
-
-            if not low_risk_df.empty:
-                st.dataframe(low_risk_df, use_container_width=True)
-            else:
-                st.info("No low-risk setups found.")
-
-            st.subheader("🟡 Moderate Risk Opportunities")
-
-            if not moderate_df.empty:
-                st.dataframe(moderate_df, use_container_width=True)
-            else:
-                st.info("No moderate-risk setups found.")
-
-            if low_risk_df.empty and moderate_df.empty:
-                st.warning("❌ No trade opportunities found based on current criteria.")
