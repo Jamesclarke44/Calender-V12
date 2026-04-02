@@ -79,7 +79,7 @@ def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
     if rsi < 40 or rsi > 60:
         return "NO", "RSI not neutral", bb_position, atr_pct, vwap_drift
 
-    if vwap_drift > 0.05:
+    if vwap_drift > 0.01:
         return "NO", "Far from VWAP", bb_position, atr_pct, vwap_drift
 
     if atr_pct > 2.5:
@@ -134,4 +134,72 @@ if mode == "Single Ticker":
 
             st.write(f"RSI: {rsi:.1f}")
             st.write(f"ADX: {adx:.1f}")
-            st.write
+            st.write(f"ATR %: {atr_pct:.2f}")
+            st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
+            st.write(f"BB Position: {bb_pos:.2f}")
+
+# ----------------- SCANNER -----------------
+
+else:
+
+    max_scan = st.slider("Max tickers", 50, 500, 200)
+
+    if st.button("Run Scan"):
+
+        universe = load_universe()[:max_scan]
+        results = []
+
+        progress = st.progress(0)
+
+        for i, ticker in enumerate(universe):
+
+            try:
+                df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+
+                if df is None or df.empty or len(df) < 50:
+                    continue
+
+                df = compute_indicators(df)
+                last = df.iloc[-1]
+
+                price = last["Close"]
+                rsi = last["RSI"]
+                adx = last["ADX"]
+                atr = last["ATR"]
+                vwap = last["VWAP"]
+
+                bb_low = last["BB_Low"]
+                bb_high = last["BB_High"]
+
+                result, reason, bb_pos, atr_pct, vwap_drift = evaluate_setup(
+                    price, rsi, adx, atr, vwap, bb_low, bb_high
+                )
+
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(price, 2),
+                    "A+ Setup": result,
+                    "Reason": reason,
+                    "RSI": round(rsi, 1),
+                    "ADX": round(adx, 1),
+                    "ATR %": round(atr_pct, 2),
+                    "VWAP Drift": round(vwap_drift, 4),
+                    "BB Position": round(bb_pos, 2)
+                })
+
+            except:
+                continue
+
+            progress.progress((i + 1) / len(universe))
+
+        if results:
+            df_results = pd.DataFrame(results)
+
+            st.subheader("📊 All Candidates")
+            st.dataframe(df_results, hide_index=True)
+
+            st.subheader("🎯 A+ Setups Only")
+            st.dataframe(df_results[df_results["A+ Setup"] == "YES"], hide_index=True)
+
+        else:
+            st.warning("No results found.")
