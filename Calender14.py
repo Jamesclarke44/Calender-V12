@@ -29,24 +29,21 @@ def load_universe():
         "O","PLD","AMT","CCI","EQIX","PSA","SPG","WELL","VTR","DLR"
     ]
 
-# ----------------- INDICATORS (FIXED) -----------------
+# ----------------- INDICATORS -----------------
 
 def compute_indicators(df):
     df = df.copy()
 
-    # Fix MultiIndex issue
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
     df = df.dropna()
 
-    # Force 1D Series (CRITICAL FIX)
     close = df["Close"].squeeze()
     high = df["High"].squeeze()
     low = df["Low"].squeeze()
     volume = df["Volume"].squeeze()
 
-    # Indicators
     df["RSI"] = RSIIndicator(close=close).rsi()
     df["ADX"] = ADXIndicator(high=high, low=low, close=close).adx()
     df["ATR"] = AverageTrueRange(high=high, low=low, close=close).average_true_range()
@@ -54,56 +51,48 @@ def compute_indicators(df):
     bb = BollingerBands(close=close)
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"] = bb.bollinger_lband()
-    df["BB_Mid"] = bb.bollinger_mavg()
 
     vwap = VolumeWeightedAveragePrice(
-        high=high,
-        low=low,
-        close=close,
-        volume=volume
+        high=high, low=low, close=close, volume=volume
     )
     df["VWAP"] = vwap.volume_weighted_average_price()
 
     return df
 
-# ----------------- REGIME -----------------
+# ----------------- A+ DECISION ENGINE -----------------
 
-def detect_regime(adx, rsi, atr_pct):
-    if adx < 30 and 35 <= rsi <= 65:
-        return "NEUTRAL"
-    elif adx >= 30:
-        return "TRENDING"
-    elif atr_pct > 3:
-        return "VOLATILE"
-    return "NEUTRAL"
+def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
 
-# ----------------- STRATEGY -----------------
+    atr_pct = (atr / price) * 100
+    vwap_drift = abs(price - vwap) / price
 
-def suggest_strategies(regime, bb_position):
-    if regime == "NEUTRAL":
-        if 0.3 < bb_position < 0.7:
-            return ["Credit Spread", "Iron Condor", "Calendar Spread"]
-        elif bb_position <= 0.3:
-            return ["Bull Put Spread"]
-        elif bb_position >= 0.7:
-            return ["Bear Call Spread"]
-
-    elif regime == "TRENDING":
-        return ["Pullback Trade", "Breakout", "Debit Spread"]
-
-    elif regime == "VOLATILE":
-        return ["Straddle", "Strangle", "Long Options"]
-
-    return ["Watch"]
-
-def get_bb_position(price, bb_low, bb_high):
+    # BB position
     if bb_high - bb_low == 0:
-        return 0.5
-    return (price - bb_low) / (bb_high - bb_low)
+        bb_position = 0.5
+    else:
+        bb_position = (price - bb_low) / (bb_high - bb_low)
+
+    # A+ criteria
+    if adx > 25:
+        return "NO", "Trending", bb_position, atr_pct, vwap_drift
+
+    if rsi < 40 or rsi > 60:
+        return "NO", "RSI not neutral", bb_position, atr_pct, vwap_drift
+
+    if vwap_drift > 0.01:
+        return "NO", "Far from VWAP", bb_position, atr_pct, vwap_drift
+
+    if atr_pct > 2.5:
+        return "NO", "Too volatile", bb_position, atr_pct, vwap_drift
+
+    if bb_position < 0.4 or bb_position > 0.6:
+        return "NO", "BB not centered", bb_position, atr_pct, vwap_drift
+
+    return "YES", "A+ Setup", bb_position, atr_pct, vwap_drift
 
 # ----------------- UI -----------------
 
-st.title("🧠 Strategy Finder")
+st.title("🧠 A+ Trading Scanner")
 
 mode = st.radio("Mode", ["Scan Universe", "Single Ticker"])
 
@@ -111,104 +100,38 @@ mode = st.radio("Mode", ["Scan Universe", "Single Ticker"])
 
 if mode == "Single Ticker":
 
-    ticker = st.text_input("Enter Ticker", value="AAPL").upper()
+    ticker = st.text_input("Enter Ticker", value="SPY").upper()
 
-    if st.button("Analyze Ticker"):
+    if st.button("Analyze"):
 
-        try:
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
-            if df is None or df.empty:
-                st.error("No data found.")
-            else:
-                df = compute_indicators(df)
-                last = df.iloc[-1]
-
-                price = last["Close"]
-                rsi = last["RSI"]
-                adx = last["ADX"]
-                atr = last["ATR"]
-
-                atr_pct = (atr / price) * 100
-                bb_low = last["BB_Low"]
-                bb_high = last["BB_High"]
-
-                bb_position = get_bb_position(price, bb_low, bb_high)
-                regime = detect_regime(adx, rsi, atr_pct)
-                strategies = suggest_strategies(regime, bb_position)
-
-                st.subheader(f"{ticker} Analysis")
-
-                st.success(f"Regime: {regime}")
-                st.write(f"Strategies: {', '.join(strategies)}")
-
-                st.markdown("---")
-
-                st.write(f"Price: {price:.2f}")
-                st.write(f"RSI: {rsi:.1f}")
-                st.write(f"ADX: {adx:.1f}")
-                st.write(f"ATR %: {atr_pct:.2f}")
-                st.write(f"BB Position: {bb_position:.2f}")
-
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-# ----------------- SCANNER -----------------
-
-else:
-
-    max_scan = st.slider("Max tickers to scan", 50, 500, 200)
-
-    if st.button("Run Scan"):
-
-        universe = load_universe()[:max_scan]
-        results = []
-
-        progress = st.progress(0)
-
-        for i, ticker in enumerate(universe):
-
-            try:
-                df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-
-                if df is None or df.empty or len(df) < 50:
-                    continue
-
-                df = compute_indicators(df)
-                last = df.iloc[-1]
-
-                price = last["Close"]
-                rsi = last["RSI"]
-                adx = last["ADX"]
-                atr = last["ATR"]
-
-                atr_pct = (atr / price) * 100
-                bb_low = last["BB_Low"]
-                bb_high = last["BB_High"]
-
-                bb_position = get_bb_position(price, bb_low, bb_high)
-                regime = detect_regime(adx, rsi, atr_pct)
-                strategies = suggest_strategies(regime, bb_position)
-
-                results.append({
-                    "Ticker": ticker,
-                    "Price": round(price,2),
-                    "Regime": regime,
-                    "Strategies": ", ".join(strategies),
-                    "RSI": round(rsi,1),
-                    "ADX": round(adx,1),
-                    "BB Position": round(bb_position,2),
-                    "ATR %": round(atr_pct,2)
-                })
-
-            except:
-                continue
-
-            progress.progress((i+1)/len(universe))
-
-        if results:
-            df_results = pd.DataFrame(results)
-            st.subheader("📊 Strategy Candidates")
-            st.dataframe(df_results.sort_values(by="BB Position"), hide_index=True)
+        if df is None or df.empty:
+            st.error("No data found")
         else:
-            st.warning("No results found.")
+            df = compute_indicators(df)
+            last = df.iloc[-1]
+
+            price = last["Close"]
+            rsi = last["RSI"]
+            adx = last["ADX"]
+            atr = last["ATR"]
+            vwap = last["VWAP"]
+
+            bb_low = last["BB_Low"]
+            bb_high = last["BB_High"]
+
+            result, reason, bb_pos, atr_pct, vwap_drift = evaluate_setup(
+                price, rsi, adx, atr, vwap, bb_low, bb_high
+            )
+
+            st.subheader(f"{ticker} — {price:.2f}")
+
+            if result == "YES":
+                st.success("GO ✅ A+ Setup")
+            else:
+                st.error(f"NO GO ⛔ — {reason}")
+
+            st.write(f"RSI: {rsi:.1f}")
+            st.write(f"ADX: {adx:.1f}")
+            st.write
