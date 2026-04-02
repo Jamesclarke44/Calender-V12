@@ -79,7 +79,7 @@ def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
     if rsi < 40 or rsi > 60:
         return "NO", "RSI not neutral", bb_position, atr_pct, vwap_drift
 
-    if vwap_drift > 0.01:
+    if vwap_drift > 0.05:
         return "NO", "Far from VWAP", bb_position, atr_pct, vwap_drift
 
     if atr_pct > 2.5:
