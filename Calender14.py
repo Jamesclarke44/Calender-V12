@@ -59,34 +59,13 @@ def compute_indicators(df):
 
     return df
 
-# ----------------- STRATEGY RECOMMENDATION -----------------
-
-def recommend_strategy(score, rsi):
-
-    if score == 5:
-        return "Iron Condor / Short Strangle"
-
-    if score == 4:
-        if rsi < 45:
-            return "Bull Put Spread"
-        elif rsi > 55:
-            return "Bear Call Spread"
-        else:
-            return "Iron Condor (Wide)"
-
-    if score == 3:
-        return "Credit Spread (Directional Bias)"
-
-    return "No Trade"
-
-# ----------------- A+ DECISION ENGINE -----------------
+# ----------------- A+ ENGINE -----------------
 
 def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
 
     atr_pct = (atr / price) * 100
     vwap_drift = abs(price - vwap) / price
 
-    # BB position
     if bb_high - bb_low == 0:
         bb_position = 0.5
     else:
@@ -95,31 +74,26 @@ def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
     score = 0
     reasons = []
 
-    # ADX
     if adx <= 25:
         score += 1
     else:
         reasons.append("Trending")
 
-    # RSI
     if 40 <= rsi <= 60:
         score += 1
     else:
         reasons.append("RSI")
 
-    # VWAP
     if vwap_drift <= 0.01:
         score += 1
     else:
         reasons.append("VWAP > 1%")
 
-    # ATR
     if atr_pct <= 2.5:
         score += 1
     else:
         reasons.append("Volatility")
 
-    # BB
     if 0.4 <= bb_position <= 0.6:
         score += 1
     else:
@@ -132,9 +106,55 @@ def evaluate_setup(price, rsi, adx, atr, vwap, bb_low, bb_high):
     else:
         return "BAD", ", ".join(reasons), score, bb_position, atr_pct, vwap_drift
 
+# ----------------- TIERED STRATEGY ENGINE -----------------
+
+def tiered_strategy(score, rsi, adx, atr_pct, bb_position):
+
+    low_risk = []
+    moderate = []
+
+    # LOW RISK (Calendars first)
+    if adx < 20 and atr_pct < 2:
+        low_risk.append("Single Calendar")
+
+    if adx < 18 and 0.45 <= bb_position <= 0.55:
+        low_risk.append("Double Calendar")
+
+    if adx < 20 and score >= 3:
+        low_risk.append("Ratio Calendar")
+
+    # MODERATE RISK
+    if score == 5:
+        moderate.append("Iron Condor")
+
+    if score == 4:
+        moderate.append("Wide Iron Condor")
+
+    if score >= 3:
+        if rsi < 50:
+            moderate.append("Bull Put Spread")
+        else:
+            moderate.append("Bear Call Spread")
+
+    if score == 5 and 0.45 <= bb_position <= 0.55:
+        moderate.append("Broken Wing Butterfly")
+
+    if score >= 4 and rsi > 55:
+        moderate.append("Jade Lizard")
+
+    # PRIORITY LOGIC
+    if low_risk:
+        return "LOW RISK", ", ".join(low_risk)
+
+    elif moderate:
+        return "MODERATE RISK", ", ".join(moderate)
+
+    else:
+        return "NO TRADE", "No suitable setups"
+
 # ----------------- UI -----------------
 
-st.title("🧠 A+ Trading Scanner")
+st.title("🧠 Strategy Finder Scanner")
 
 mode = st.radio("Mode", ["Scan Universe", "Single Ticker"])
 
@@ -167,7 +187,7 @@ if mode == "Single Ticker":
                 price, rsi, adx, atr, vwap, bb_low, bb_high
             )
 
-            strategy = recommend_strategy(score, rsi)
+            risk_level, strategies = tiered_strategy(score, rsi, adx, atr_pct, bb_pos)
 
             st.subheader(f"{ticker} — {price:.2f}")
 
@@ -184,7 +204,8 @@ if mode == "Single Ticker":
             st.write(f"VWAP Drift: {vwap_drift:.4f}")
             st.write(f"BB Position: {bb_pos:.2f}")
             st.write(f"Score: {score}/5")
-            st.write(f"Recommended Strategy: **{strategy}**")
+            st.write(f"Risk Level: **{risk_level}**")
+            st.write(f"Strategies: **{strategies}**")
 
 # ----------------- SCANNER -----------------
 
@@ -223,14 +244,15 @@ else:
                     price, rsi, adx, atr, vwap, bb_low, bb_high
                 )
 
-                strategy = recommend_strategy(score, rsi)
+                risk_level, strategies = tiered_strategy(score, rsi, adx, atr_pct, bb_pos)
 
                 results.append({
                     "Ticker": ticker,
                     "Price": round(price, 2),
                     "Grade": result,
                     "Score": score,
-                    "Strategy": strategy,
+                    "Risk Level": risk_level,
+                    "Strategies": strategies,
                     "Reason": reason,
                     "RSI": round(rsi, 1),
                     "ADX": round(adx, 1),
@@ -247,13 +269,19 @@ else:
         if results:
             df_results = pd.DataFrame(results)
 
-            df_results = df_results.sort_values(by="Score", ascending=False)
-
             st.subheader("📊 All Results")
-            st.dataframe(df_results, hide_index=True)
+            st.dataframe(df_results.sort_values(by="Score", ascending=False), hide_index=True)
 
-            st.subheader("🎯 A+ Setups")
-            st.dataframe(df_results[df_results["Grade"] == "A+"], hide_index=True)
+            low_risk_df = df_results[df_results["Risk Level"] == "LOW RISK"]
+
+            st.subheader("🟢 Low Risk (Calendars First)")
+
+            if low_risk_df.empty:
+                st.warning("⚠️ No available calendar spread trades. Showing moderate-risk setups.")
+                st.dataframe(df_results[df_results["Risk Level"] == "MODERATE RISK"], hide_index=True)
+            else:
+                st.success("✅ Low-risk calendar opportunities found")
+                st.dataframe(low_risk_df, hide_index=True)
 
         else:
             st.warning("No results found.")
