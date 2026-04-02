@@ -8,12 +8,23 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import VolumeWeightedAveragePrice
 
-st.set_page_config(page_title="Trading Engine Lite", layout="centered")
+st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
+
+# ----------------- MARKET UNIVERSE -----------------
+
+@st.cache_data
+def load_universe():
+    return [
+        "SPY","QQQ","DIA","IWM","VTI",
+        "AAPL","MSFT","NVDA","TSLA","AMZN",
+        "META","GOOGL","NFLX",
+        "XLF","XLV","XLE","XLK"
+    ]
 
 # ----------------- FUNCTIONS -----------------
 
 def fetch_data(ticker):
-    df = yf.download(ticker, period="6mo", interval="1d")
+    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
     if df.empty:
         return None
     return df
@@ -86,69 +97,125 @@ def decision_engine(adx, rsi, vwap_drift, atr_pct):
 
 # ----------------- UI -----------------
 
-st.title("📊 Trading Engine Lite")
+st.title("📊 Trading Engine Scanner")
 
-ticker = st.text_input("Ticker", value="SPY").upper()
+mode = st.radio("Mode", ["Single Ticker", "Market Scan"])
 
-auto = st.checkbox("Auto Refresh (60s)", value=True)
+# ----------------- SINGLE TICKER MODE -----------------
 
-run = st.button("Run") if not auto else True
+if mode == "Single Ticker":
 
-if run and ticker:
+    ticker = st.text_input("Ticker", value="SPY").upper()
+    auto = st.checkbox("Auto Refresh (60s)", value=True)
+    run = st.button("Run") if not auto else True
 
-    df = fetch_data(ticker)
+    if run and ticker:
 
-    if df is None:
-        st.error("Invalid ticker")
-    else:
-        df = compute_indicators(df)
-        last = df.iloc[-1]
+        df = fetch_data(ticker)
 
-        price = last["Close"]
-        rsi = last["RSI"]
-        adx = last["ADX"]
-        atr = last["ATR"]
-        vwap = last["VWAP"]
-
-        sma50 = last["SMA50"]
-        sma200 = last["SMA200"]
-
-        atr_pct = (atr / price) * 100
-        vwap_drift = abs(price - vwap) / price
-
-        # --- CORE OUTPUT ---
-
-        decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct)
-        bias = get_bias(price, sma50, sma200, rsi, vwap)
-        regime = get_regime(adx, atr_pct)
-
-        st.subheader(f"{ticker} — {price:.2f}")
-
-        if decision == "GO":
-            st.success("GO ✅")
+        if df is None:
+            st.error("Invalid ticker")
         else:
-            st.error("NO GO ⛔")
+            df = compute_indicators(df)
+            last = df.iloc[-1]
 
-        st.write(reason)
+            price = last["Close"]
+            rsi = last["RSI"]
+            adx = last["ADX"]
+            atr = last["ATR"]
+            vwap = last["VWAP"]
 
-        st.markdown("---")
+            sma50 = last["SMA50"]
+            sma200 = last["SMA200"]
 
-        st.subheader("🧭 Direction")
-        st.write(bias)
+            atr_pct = (atr / price) * 100
+            vwap_drift = abs(price - vwap) / price
 
-        st.subheader("🌎 Regime")
-        st.write(regime)
+            decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct)
+            bias = get_bias(price, sma50, sma200, rsi, vwap)
+            regime = get_regime(adx, atr_pct)
 
-        st.markdown("---")
+            st.subheader(f"{ticker} — {price:.2f}")
 
-        st.subheader("📊 Indicators")
-        st.write(f"RSI: {rsi:.1f}")
-        st.write(f"ADX: {adx:.1f}")
-        st.write(f"ATR %: {atr_pct:.2f}%")
-        st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
+            if decision == "GO":
+                st.success("GO ✅")
+            else:
+                st.error("NO GO ⛔")
+
+            st.write(reason)
+
+            st.subheader("🧭 Direction")
+            st.write(bias)
+
+            st.subheader("🌎 Regime")
+            st.write(regime)
+
+# ----------------- MARKET SCANNER -----------------
+
+if mode == "Market Scan":
+
+    if st.button("Run Market Scan"):
+
+        universe = load_universe()
+        results = []
+
+        progress = st.progress(0)
+
+        for i, ticker in enumerate(universe):
+
+            df = fetch_data(ticker)
+
+            if df is None:
+                continue
+
+            df = compute_indicators(df)
+            last = df.iloc[-1]
+
+            price = last["Close"]
+            rsi = last["RSI"]
+            adx = last["ADX"]
+            atr = last["ATR"]
+            vwap = last["VWAP"]
+
+            if pd.isna(adx) or pd.isna(rsi):
+                continue
+
+            atr_pct = (atr / price) * 100
+            vwap_drift = abs(price - vwap) / price
+
+            decision, _ = decision_engine(adx, rsi, vwap_drift, atr_pct)
+
+            if decision == "GO":
+
+                score = (
+                    (25 - adx) +
+                    (1 - abs(rsi - 50) / 50) * 10 +
+                    (1 - vwap_drift) * 10
+                )
+
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(price, 2),
+                    "RSI": round(rsi, 1),
+                    "ADX": round(adx, 1),
+                    "ATR %": round(atr_pct, 2),
+                    "VWAP Drift": round(vwap_drift, 4),
+                    "Score": round(score, 2)
+                })
+
+            progress.progress((i + 1) / len(universe))
+
+        if results:
+            df_results = pd.DataFrame(results)
+            df_results = df_results.sort_values(by="Score", ascending=False)
+
+            st.subheader("🎯 Top Neutral Setups")
+            st.dataframe(df_results)
+        else:
+            st.write("No setups found.")
 
 # ----------------- AUTO REFRESH -----------------
 
-if auto:
+if mode == "Single Ticker" and auto:
     time.sleep(60)
     st.rerun()
