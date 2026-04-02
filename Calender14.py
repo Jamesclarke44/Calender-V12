@@ -30,11 +30,24 @@ def load_universe():
         "SHOP.TO","RY.TO","TD.TO","ENB.TO","BNS.TO"
     ]
 
+# ----------------- S&P 500 -----------------
+
+@st.cache_data
+def load_sp500():
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    tables = pd.read_html(url)
+    table = tables[0]
+
+    tickers = table["Symbol"].tolist()
+    tickers = [t.replace(".", "-") for t in tickers]
+
+    return tickers
+
 # ----------------- DATA -----------------
 
 def fetch_data(ticker):
     try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False, threads=False)
         if df is None or df.empty:
             return None
         return df
@@ -96,24 +109,20 @@ def get_regime(adx, atr_pct):
     return "TRENDING"
 
 def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
-    
-    # ADX filter
+
     if adx > 25:
         return "NO GO", "Trending market"
 
-    # RSI filter
     if rsi < 40 or rsi > 60:
         return "NO GO", "Momentum not neutral"
 
-    # VWAP filter
     if vwap_drift > 0.01:
         return "NO GO", "Too far from VWAP"
 
-    # Volatility filter
     if atr_pct > 2.5:
         return "NO GO", "Volatility too high"
 
-    # ✅ Bollinger Band Position Filter
+    # Bollinger Band neutrality (40–60%)
     if bb_position < 0.4 or bb_position > 0.6:
         return "NO GO", "Price not centered in Bollinger Bands"
 
@@ -125,7 +134,7 @@ st.title("📊 Trading Engine Scanner")
 
 mode = st.radio("Mode", ["Single Ticker", "Market Scan"])
 
-# ----------------- SINGLE TICKER -----------------
+# ----------------- SINGLE -----------------
 
 if mode == "Single Ticker":
 
@@ -155,9 +164,12 @@ if mode == "Single Ticker":
             atr_pct = (atr / price) * 100
             vwap_drift = abs(price - vwap) / price
 
-            # Bollinger Position
             bb_range = last["BB_High"] - last["BB_Low"]
-            bb_position = (price - last["BB_Low"]) / bb_range
+
+            if bb_range == 0 or pd.isna(bb_range):
+                bb_position = 0.5
+            else:
+                bb_position = (price - last["BB_Low"]) / bb_range
 
             decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
             bias = get_bias(price, sma50, sma200, rsi, vwap)
@@ -189,11 +201,19 @@ if mode == "Single Ticker":
 
 if mode == "Market Scan":
 
+    universe_choice = st.selectbox(
+        "Universe",
+        ["Custom Universe", "S&P 500"]
+    )
+
     if st.button("Run Market Scan"):
 
-        universe = load_universe()
-        results = []
+        if universe_choice == "S&P 500":
+            universe = load_sp500()
+        else:
+            universe = load_universe()
 
+        results = []
         progress = st.progress(0)
 
         for i, ticker in enumerate(universe):
@@ -219,7 +239,11 @@ if mode == "Market Scan":
             vwap_drift = abs(price - vwap) / price
 
             bb_range = last["BB_High"] - last["BB_Low"]
-            bb_position = (price - last["BB_Low"]) / bb_range
+
+            if bb_range == 0 or pd.isna(bb_range):
+                bb_position = 0.5
+            else:
+                bb_position = (price - last["BB_Low"]) / bb_range
 
             decision, _ = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
 
@@ -251,11 +275,11 @@ if mode == "Market Scan":
             df_results = df_results.reset_index(drop=True)
             df_results.insert(0, "Rank", df_results.index + 1)
 
-            st.subheader("🎯 All Neutral Setups (Ranked)")
+            st.subheader("🎯 Neutral Setups (Ranked)")
             st.dataframe(df_results, hide_index=True)
 
         else:
-            st.warning("No A+ setups found — market likely trending or volatile.")
+            st.warning("No setups found.")
 
 # ----------------- AUTO REFRESH -----------------
 
