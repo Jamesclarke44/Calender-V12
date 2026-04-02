@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import numpy as np
+import time
 
 # =========================
 # PAGE CONFIG
@@ -9,26 +10,35 @@ import numpy as np
 st.set_page_config(page_title="Market Scanner", layout="wide")
 
 # =========================
-# LOAD S&P 500
+# LOAD S&P 500 (SAFE)
 # =========================
 @st.cache_data
 def load_sp500():
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    table = pd.read_html(url)[0]
-    tickers = table["Symbol"].tolist()
-    tickers = [t.replace(".", "-") for t in tickers]
-    return tickers
+    try:
+        tables = pd.read_html(url)
+        table = tables[0]
+
+        if "Symbol" not in table.columns:
+            return []
+
+        tickers = table["Symbol"].tolist()
+        tickers = [t.replace(".", "-") for t in tickers]
+
+        return tickers
+
+    except Exception:
+        return []
 
 # =========================
-# LOAD UNIVERSE
+# UNIVERSE
 # =========================
 def load_universe(selection):
     if selection == "SPY / DIA / QQQ":
         return ["SPY", "DIA", "QQQ"]
     elif selection == "S&P 500":
         return load_sp500()
-    else:
-        return []
+    return []
 
 # =========================
 # INDICATORS
@@ -36,29 +46,28 @@ def load_universe(selection):
 def compute_indicators(df):
     df = df.copy()
 
-    # Bollinger Bands
     window = 20
     df["MA"] = df["Close"].rolling(window).mean()
     df["STD"] = df["Close"].rolling(window).std()
+
     df["Upper"] = df["MA"] + 2 * df["STD"]
     df["Lower"] = df["MA"] - 2 * df["STD"]
 
-    # Bollinger Position (0 = lower band, 1 = upper band)
     df["BB_Pos"] = (df["Close"] - df["Lower"]) / (df["Upper"] - df["Lower"])
 
     return df
 
 # =========================
-# SCORING FUNCTION
+# SCORING
 # =========================
 def score_setup(row):
     score = 0
 
-    # Bollinger Band condition (40%–60%)
+    # Bollinger Band neutrality
     if 0.4 <= row["BB_Pos"] <= 0.6:
         score += 2
 
-    # Price near MA (mean reversion / neutral)
+    # Price near MA
     if abs(row["Close"] - row["MA"]) / row["MA"] < 0.02:
         score += 1
 
@@ -69,48 +78,60 @@ def score_setup(row):
 # =========================
 def get_data(ticker):
     try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        if df.empty:
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False, threads=False)
+
+        if df is None or df.empty:
             return None
+
         df = compute_indicators(df)
         return df
-    except:
+
+    except Exception:
         return None
 
 # =========================
-# SCAN FUNCTION
+# BATCH SCAN (KEY UPGRADE)
 # =========================
-def scan_market(tickers, progress_bar):
+def scan_market(tickers, batch_size=50):
     results = []
-
     total = len(tickers)
 
-    for i, ticker in enumerate(tickers):
-        df = get_data(ticker)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-        if df is None:
-            continue
+    for i in range(0, total, batch_size):
+        batch = tickers[i:i + batch_size]
 
-        latest = df.iloc[-1]
+        for ticker in batch:
+            df = get_data(ticker)
 
-        score = score_setup(latest)
+            if df is None:
+                continue
 
-        if score > 0:
-            results.append({
-                "Ticker": ticker,
-                "Price": latest["Close"],
-                "BB_Pos": latest["BB_Pos"],
-                "Score": score
-            })
+            latest = df.iloc[-1]
+            score = score_setup(latest)
 
-        progress_bar.progress((i + 1) / total)
+            if score > 0:
+                results.append({
+                    "Ticker": ticker,
+                    "Price": latest["Close"],
+                    "BB_Pos": latest["BB_Pos"],
+                    "Score": score
+                })
+
+        progress = min((i + batch_size) / total, 1.0)
+        progress_bar.progress(progress)
+        status_text.text(f"Scanning... {i + batch_size}/{total}")
+
+        # Small delay to avoid rate limits
+        time.sleep(0.5)
 
     if results:
-        results_df = pd.DataFrame(results)
-        results_df = results_df.sort_values(by="Score", ascending=False)
-        return results_df
-    else:
-        return pd.DataFrame()
+        df_results = pd.DataFrame(results)
+        df_results = df_results.sort_values(by="Score", ascending=False)
+        return df_results
+
+    return pd.DataFrame()
 
 # =========================
 # UI
@@ -120,7 +141,7 @@ st.title("📊 Market Scanner")
 mode = st.radio("Mode", ["Single Ticker", "Market Scan"])
 
 # =========================
-# SINGLE TICKER MODE
+# SINGLE MODE
 # =========================
 if mode == "Single Ticker":
     ticker = st.text_input("Enter Ticker", "SPY")
@@ -144,18 +165,15 @@ else:
     )
 
     if st.button("Run Scan"):
-        st.info("Scanning market...")
-
         tickers = load_universe(universe_option)
 
-        progress_bar = st.progress(0)
+        if universe_option == "S&P 500":
+            st.info(f"Scanning {len(tickers)} tickers (batched)...")
 
-        results_df = scan_market(tickers, progress_bar)
+        results_df = scan_market(tickers)
 
         if not results_df.empty:
             st.success(f"Found {len(results_df)} setups")
-
             st.dataframe(results_df, use_container_width=True)
-
         else:
             st.warning("No setups found.")
