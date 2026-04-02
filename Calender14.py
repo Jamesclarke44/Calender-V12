@@ -253,3 +253,4 @@ if mode == "Scan Universe":
 
             if low_risk_df.empty and moderate_df.empty:
                 st.warning("❌ No trade opportunities found based on current criteria.")
+                
