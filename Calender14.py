@@ -102,11 +102,15 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
 
 # ----------------- SCANNER -----------------
 
-def scan_universe(tickers):
+def scan_universe(tickers, progress_bar, status_text):
 
     results = []
+    total = len(tickers)
 
-    for ticker in tickers:
+    for i, ticker in enumerate(tickers):
+
+        status_text.text(f"Scanning {ticker} ({i+1}/{total})")
+
         try:
             df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
@@ -143,6 +147,11 @@ def scan_universe(tickers):
 
         except Exception:
             continue
+
+        # update progress bar
+        progress_bar.progress((i + 1) / total)
+
+    status_text.text("Scan complete ✅")
 
     return pd.DataFrame(results)
 
@@ -210,14 +219,14 @@ if mode == "Scan Universe":
 
     if st.button("Run Scan"):
 
-        with st.spinner("Scanning market... please wait ⏳"):
+        tickers = load_universe()
 
-            tickers = load_universe()
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-            # Optional: limit for testing speed
-            # tickers = tickers[:20]
+        with st.spinner("Scanning market..."):
 
-            df_results = scan_universe(tickers)
+            df_results = scan_universe(tickers, progress_bar, status_text)
 
         if df_results.empty:
             st.warning("❌ No opportunities found")
