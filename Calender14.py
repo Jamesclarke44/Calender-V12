@@ -1,5 +1,4 @@
 import streamlit as st
-import time
 import pandas as pd
 import yfinance as yf
 from ta.trend import ADXIndicator
@@ -7,7 +6,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import VolumeWeightedAveragePrice
 
-st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
+st.set_page_config(page_title="Trading Engine Scanner + Strategy", layout="centered")
 
 # ----------------- UNIVERSE -----------------
 
@@ -15,46 +14,20 @@ st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
 def load_universe():
     return [
         "SPY","QQQ","DIA","IWM","VTI","VOO","IVV",
-
-        "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU","XLB","XLRE","XLC",
-
-        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","AVGO","NFLX",
-        "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW","PANW","SNOW",
-
-        "JPM","BAC","GS","MS","C","WFC","SCHW","BLK","USB","PNC",
-
-        "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT","PG","KO","PEP",
-
-        "JNJ","UNH","PFE","MRK","ABBV","TMO","DHR","ABT","MDT","BMY",
-
-        "NEE","DUK","SO","AEP","EXC","XEL","ED","PEG","ES",
-
-        "O","PLD","SPG","AMT","CCI","EQIX","PSA","WELL","VTR",
-
-        "HON","UPS","UNP","CAT","DE","MMM","EMR","ITW","GD",
-
-        "VZ","T","TMUS",
-
-        "XOM","CVX","COP","EOG","SLB","OXY",
-
-        "SHOP.TO","RY.TO","TD.TO","BNS.TO","BMO.TO","ENB.TO","TRP.TO"
+        "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU",
+        "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA",
+        "AMD","INTC","CRM","ORCL","ADBE","CSCO","NOW",
+        "JPM","BAC","GS","MS","C","WFC",
+        "WMT","COST","HD","LOW","NKE","SBUX","MCD",
+        "JNJ","UNH","PFE","MRK","ABBV","TMO","DHR",
+        "NEE","DUK","SO","AEP","EXC",
+        "XOM","CVX","COP","EOG","SLB"
     ]
 
-# ----------------- UTIL -----------------
-
-def chunk_list(lst, size=50):
-    for i in range(0, len(lst), size):
-        yield lst[i:i + size]
-
-# ----------------- DATA -----------------
+# ----------------- INDICATORS -----------------
 
 def compute_indicators(df):
     df = df.copy()
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns]
-
-    df = df.dropna()
 
     df["RSI"] = RSIIndicator(df["Close"]).rsi()
     df["ADX"] = ADXIndicator(df["High"], df["Low"], df["Close"]).adx()
@@ -63,174 +36,118 @@ def compute_indicators(df):
     bb = BollingerBands(df["Close"])
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"] = bb.bollinger_lband()
+    df["BB_Mid"] = bb.bollinger_mavg()
 
     vwap = VolumeWeightedAveragePrice(
         df["High"], df["Low"], df["Close"], df["Volume"]
     )
     df["VWAP"] = vwap.volume_weighted_average_price()
 
-    df["SMA50"] = df["Close"].rolling(50).mean()
-    df["SMA200"] = df["Close"].rolling(200).mean()
-
     return df
 
-# ----------------- PRE-FILTER -----------------
+# ----------------- STRATEGY LOGIC -----------------
 
-def pre_filter(price, rsi, adx, atr_pct):
-    if price < 10:
-        return False
+def strategy_setup(last):
 
-    if pd.isna(rsi) or pd.isna(adx):
-        return False
+    price = last["Close"]
+    rsi = last["RSI"]
+    adx = last["ADX"]
+    bb_high = last["BB_High"]
+    bb_low = last["BB_Low"]
+    bb_mid = last["BB_Mid"]
+    vwap = last["VWAP"]
+    atr = last["ATR"]
 
-    if adx > 30:
-        return False
+    # Defaults
+    setup = "WAIT"
+    entry = None
+    stop = None
+    target = None
+    confidence = 0
 
-    if rsi < 30 or rsi > 70:
-        return False
+    # Range condition
+    if adx < 25:
 
-    if atr_pct < 0.3 or atr_pct > 5:
-        return False
+        # ---------------- LONG ----------------
+        if price <= bb_low and rsi < 45:
 
-    return True
+            setup = "LONG"
 
-# ----------------- DECISION ENGINE -----------------
+            entry = price
+            stop = price - (1.2 * atr)
+            target = bb_mid if price < bb_mid else vwap
 
-def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
+            confidence = (50 - rsi) + (bb_mid - price)
 
-    if adx > 25:
-        return "NO GO", "Trending market"
+        # ---------------- SHORT ----------------
+        elif price >= bb_high and rsi > 55:
 
-    if rsi < 40 or rsi > 60:
-        return "NO GO", "Momentum not neutral"
+            setup = "SHORT"
 
-    if vwap_drift > 0.01:
-        return "NO GO", "Too far from VWAP"
+            entry = price
+            stop = price + (1.2 * atr)
+            target = bb_mid if price > bb_mid else vwap
 
-    if atr_pct > 2.5:
-        return "NO GO", "Volatility too high"
+            confidence = (rsi - 50) + (price - bb_mid)
 
-    if bb_position < 0.4 or bb_position > 0.6:
-        return "NO GO", "Price not centered in Bollinger Bands"
-
-    return "GO", "All conditions aligned"
-
-# ----------------- BIAS -----------------
-
-def get_bias(price, sma50, sma200, rsi, vwap):
-    score = 0
-
-    score += 1 if price > sma50 else -1
-    score += 1 if sma50 > sma200 else -1
-
-    if rsi > 55:
-        score += 1
-    elif rsi < 45:
-        score -= 1
-
-    score += 1 if price > vwap else -1
-
-    if score >= 2:
-        return "BULLISH"
-    elif score <= -2:
-        return "BEARISH"
-    return "NEUTRAL"
+    return setup, entry, stop, target, confidence
 
 # ----------------- UI -----------------
 
-st.title("📊 Trading Engine Scanner (Scaled)")
+st.title("📊 Trading Scanner + Strategy Engine")
 
-max_scan = st.slider("Max tickers to scan", 50, 600, 300)
+max_scan = st.slider("Max tickers to scan", 50, 300, 150)
 
 if st.button("Run Scan"):
 
     universe = load_universe()[:max_scan]
 
     results = []
+
     progress = st.progress(0)
 
-    batch_size = 50
-    batches = list(chunk_list(universe, batch_size))
+    for i, ticker in enumerate(universe):
 
-    for b_idx, batch in enumerate(batches):
+        try:
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
 
-        data = yf.download(
-            tickers=batch,
-            period="6mo",
-            interval="1d",
-            group_by="ticker",
-            threads=True,
-            progress=False
-        )
-
-        for ticker in batch:
-
-            try:
-                df = data[ticker].dropna()
-
-                if df.empty or len(df) < 50:
-                    continue
-
-                df = compute_indicators(df)
-                last = df.iloc[-1]
-
-                price = last["Close"]
-                rsi = last["RSI"]
-                adx = last["ADX"]
-                atr = last["ATR"]
-                vwap = last["VWAP"]
-
-                atr_pct = (atr / price) * 100
-                vwap_drift = abs(price - vwap) / price
-
-                # -------- PRE FILTER --------
-                if not pre_filter(price, rsi, adx, atr_pct):
-                    continue
-
-                # -------- BB POSITION --------
-                bb_range = last["BB_High"] - last["BB_Low"]
-
-                if bb_range == 0 or pd.isna(bb_range):
-                    bb_position = 0.5
-                else:
-                    bb_position = (price - last["BB_Low"]) / bb_range
-
-                # -------- DECISION --------
-                decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
-
-                if decision == "GO":
-
-                    score = (
-                        (25 - adx) +
-                        (1 - abs(rsi - 50) / 50) * 10 +
-                        (1 - vwap_drift) * 10 +
-                        (1 - abs(bb_position - 0.5)) * 10
-                    )
-
-                    results.append({
-                        "Ticker": ticker,
-                        "Price": round(price, 2),
-                        "RSI": round(rsi, 1),
-                        "ADX": round(adx, 1),
-                        "ATR %": round(atr_pct, 2),
-                        "VWAP Drift": round(vwap_drift, 4),
-                        "BB Position": round(bb_position, 2),
-                        "Score": round(score, 2)
-                    })
-
-            except:
+            if df.empty or len(df) < 50:
                 continue
 
-        progress.progress((b_idx + 1) / len(batches))
+            df = compute_indicators(df)
+            last = df.iloc[-1]
+
+            price = last["Close"]
+
+            # Strategy
+            setup, entry, stop, target, confidence = strategy_setup(last)
+
+            # Filter: only show meaningful setups
+            if setup == "WAIT":
+                continue
+
+            results.append({
+                "Ticker": ticker,
+                "Setup": setup,
+                "Price": round(price, 2),
+                "Entry": round(entry, 2) if entry else None,
+                "Stop": round(stop, 2) if stop else None,
+                "Target": round(target, 2) if target else None,
+                "Confidence": round(confidence, 2)
+            })
+
+        except:
+            continue
+
+        progress.progress((i + 1) / len(universe))
 
     if results:
         df_results = pd.DataFrame(results)
-        df_results = df_results.sort_values(by="Score", ascending=False)
+        df_results = df_results.sort_values(by="Confidence", ascending=False)
         df_results = df_results.reset_index(drop=True)
         df_results.insert(0, "Rank", df_results.index + 1)
 
-        st.subheader("🎯 Neutral Setups (Ranked)")
+        st.subheader("🎯 Active Trade Setups")
         st.dataframe(df_results, hide_index=True)
-
     else:
         st.warning("No setups found.")
