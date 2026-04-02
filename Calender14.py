@@ -15,38 +15,18 @@ st.set_page_config(page_title="Trading Engine Scanner", layout="centered")
 @st.cache_data
 def load_universe():
     return [
-
-        # ETFs
         "SPY","QQQ","DIA","IWM","VTI",
         "XLF","XLV","XLE","XLK","XLY","XLI","XLP","XLU","XLB","XLRE",
-
-        # Mega Caps
         "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","BRK-B",
         "AVGO","NFLX","AMD","INTC","CRM","ORCL","ADBE","CSCO",
-
-        # Financials
         "JPM","BAC","GS","MS","C","WFC","SCHW","BLK",
-
-        # Consumer
         "WMT","COST","HD","LOW","NKE","SBUX","MCD","TGT",
-
-        # Healthcare
         "UNH","LLY","JNJ","PFE","MRK","ABBV","TMO","DHR",
-
-        # Energy
         "XOM","CVX","COP","SLB","EOG","OXY",
-
-        # Industrials
         "CAT","DE","GE","HON","BA","UPS","FDX",
-
-        # Communication
         "DIS","CMCSA","TMUS","VZ","T",
-
-        # Volatile names
         "PYPL","SQ","SHOP","UBER","LYFT","SNAP","ROKU",
         "PLTR","COIN","RIOT","MARA","SOFI",
-
-        # Canadian
         "SHOP.TO","RY.TO","TD.TO","ENB.TO","BNS.TO"
     ]
 
@@ -115,17 +95,29 @@ def get_regime(adx, atr_pct):
         return "TRANSITION"
     return "TRENDING"
 
-def decision_engine(adx, rsi, vwap_drift, atr_pct):
+def decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position):
+    
+    # ADX filter
     if adx > 25:
         return "NO GO", "Trending market"
+
+    # RSI filter
     if rsi < 40 or rsi > 60:
         return "NO GO", "Momentum not neutral"
+
+    # VWAP filter
     if vwap_drift > 0.01:
         return "NO GO", "Too far from VWAP"
+
+    # Volatility filter
     if atr_pct > 2.5:
         return "NO GO", "Volatility too high"
 
-    return "GO", "Clean neutral environment"
+    # ✅ Bollinger Band Position Filter
+    if bb_position < 0.4 or bb_position > 0.6:
+        return "NO GO", "Price not centered in Bollinger Bands"
+
+    return "GO", "All conditions aligned"
 
 # ----------------- UI -----------------
 
@@ -163,7 +155,11 @@ if mode == "Single Ticker":
             atr_pct = (atr / price) * 100
             vwap_drift = abs(price - vwap) / price
 
-            decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct)
+            # Bollinger Position
+            bb_range = last["BB_High"] - last["BB_Low"]
+            bb_position = (price - last["BB_Low"]) / bb_range
+
+            decision, reason = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
             bias = get_bias(price, sma50, sma200, rsi, vwap)
             regime = get_regime(adx, atr_pct)
 
@@ -187,6 +183,7 @@ if mode == "Single Ticker":
             st.write(f"ADX: {adx:.1f}")
             st.write(f"ATR %: {atr_pct:.2f}%")
             st.write(f"VWAP Drift: {vwap_drift*100:.2f}%")
+            st.write(f"BB Position: {bb_position:.2f}")
 
 # ----------------- MARKET SCAN -----------------
 
@@ -203,11 +200,7 @@ if mode == "Market Scan":
 
             df = fetch_data(ticker)
 
-            if df is None:
-                continue
-
-            # Speed protection
-            if len(df) < 50:
+            if df is None or len(df) < 50:
                 continue
 
             df = compute_indicators(df)
@@ -225,14 +218,18 @@ if mode == "Market Scan":
             atr_pct = (atr / price) * 100
             vwap_drift = abs(price - vwap) / price
 
-            decision, _ = decision_engine(adx, rsi, vwap_drift, atr_pct)
+            bb_range = last["BB_High"] - last["BB_Low"]
+            bb_position = (price - last["BB_Low"]) / bb_range
+
+            decision, _ = decision_engine(adx, rsi, vwap_drift, atr_pct, bb_position)
 
             if decision == "GO":
 
                 score = (
                     (25 - adx) +
                     (1 - abs(rsi - 50) / 50) * 10 +
-                    (1 - vwap_drift) * 10
+                    (1 - vwap_drift) * 10 +
+                    (1 - abs(bb_position - 0.5)) * 10
                 )
 
                 results.append({
@@ -242,19 +239,16 @@ if mode == "Market Scan":
                     "ADX": round(adx, 1),
                     "ATR %": round(atr_pct, 2),
                     "VWAP Drift": round(vwap_drift, 4),
+                    "BB Position": round(bb_position, 2),
                     "Score": round(score, 2)
                 })
 
             progress.progress((i + 1) / len(universe))
 
-        # ---------------- OUTPUT ----------------
-
         if results:
             df_results = pd.DataFrame(results)
-
             df_results = df_results.sort_values(by="Score", ascending=False)
             df_results = df_results.reset_index(drop=True)
-
             df_results.insert(0, "Rank", df_results.index + 1)
 
             st.subheader("🎯 All Neutral Setups (Ranked)")
