@@ -78,7 +78,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
         0.45 <= bb_position <= 0.55 and
         atr_pct <= 2.2
     ):
-        strategies += ["Single Calendar", "Double Calendar", "Ratio Calendar"]
+        strategies += ["Single Calendar"]
         risk_level = "LOW RISK"
 
     # MODERATE RISK
