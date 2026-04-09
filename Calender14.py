@@ -72,7 +72,7 @@ def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
 
     # LOW RISK
     if (
-        45 <= rsi <= 55 and
+        40 <= rsi <= 60 and
         adx < 20 and
         vwap_drift <= 0.01 and
         0.45 <= bb_position <= 0.55 and
