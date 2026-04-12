@@ -5,6 +5,7 @@ from ta.trend import ADXIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import VolumeWeightedAveragePrice
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Strategy Finder", layout="centered")
 
@@ -55,7 +56,68 @@ def compute_indicators(df):
 
     return df
 
-# ----------------- STRATEGY -----------------
+# ----------------- STRATEGY DETAILS (NEW) -----------------
+
+def build_strategy_details(price, strategies, rsi, adx):
+    details = {}
+
+    # Trend detection
+    if rsi > 55 and adx < 20:
+        trend = "slightly bullish"
+    elif rsi < 45 and adx < 20:
+        trend = "slightly bearish"
+    else:
+        trend = "neutral"
+
+    # ---------------- CALENDAR ----------------
+    if "Single Calendar" in strategies:
+        strike = round(price)
+
+        front_exp = (datetime.today() + timedelta(days=15)).strftime("%Y-%m-%d")
+        back_exp = (datetime.today() + timedelta(days=40)).strftime("%Y-%m-%d")
+
+        details["Strategy"] = "Single Calendar"
+        details["Type"] = "Call Calendar" if trend != "slightly bearish" else "Put Calendar"
+        details["Strike"] = strike
+        details["Front Expiry"] = front_exp
+        details["Back Expiry"] = back_exp
+        details["Trend"] = trend
+
+    # ---------------- IRON CONDOR ----------------
+    elif "Wide Iron Condor" in strategies:
+        width = 5
+        expiry = (datetime.today() + timedelta(days=35)).strftime("%Y-%m-%d")
+
+        details["Strategy"] = "Wide Iron Condor"
+        details["Call Wing"] = f"{round(price + width)}C"
+        details["Put Wing"] = f"{round(price - width)}P"
+        details["Expiry"] = expiry
+        details["Trend"] = trend
+
+    # ---------------- CREDIT SPREAD ----------------
+    elif "Wide Credit Spread" in strategies:
+        width = 3
+        expiry = (datetime.today() + timedelta(days=30)).strftime("%Y-%m-%d")
+
+        if trend == "slightly bullish":
+            details["Strategy"] = "Bull Put Spread"
+            details["Short Strike"] = round(price - 2)
+            details["Long Strike"] = round(price - 2 - width)
+        elif trend == "slightly bearish":
+            details["Strategy"] = "Bear Call Spread"
+            details["Short Strike"] = round(price + 2)
+            details["Long Strike"] = round(price + 2 + width)
+        else:
+            details["Strategy"] = "Neutral Credit Spread"
+            details["Short Strike"] = round(price)
+            details["Long Strike"] = round(price + width)
+
+        details["Expiry"] = expiry
+        details["Trend"] = trend
+
+    return details
+
+# ----------------- STRATEGY CLASSIFIER -----------------
 
 def classify_strategies(price, rsi, adx, atr, vwap, bb_low, bb_high):
 
@@ -130,6 +192,8 @@ def scan_universe(tickers, progress_bar, status_text, counter_text):
             )
 
             if risk_level:
+                strat_details = build_strategy_details(price, strategies, rsi, adx)
+
                 results.append({
                     "Ticker": ticker,
                     "Price": round(price, 2),
@@ -139,7 +203,8 @@ def scan_universe(tickers, progress_bar, status_text, counter_text):
                     "VWAP Drift %": round(vwap_drift * 100, 2),
                     "BB Position": round(bb_pos, 2),
                     "Risk Level": risk_level,
-                    "Strategies": ", ".join(strategies)
+                    "Strategies": ", ".join(strategies),
+                    "Details": strat_details
                 })
 
         except Exception:
@@ -180,14 +245,9 @@ if mode == "Scan Universe":
             st.subheader("🟢 Low Risk Opportunities")
 
             if not low_risk_df.empty:
-                # Sort by ATR % (lower = better stability)
                 low_risk_df = low_risk_df.sort_values(by="ATR %")
-
                 st.dataframe(low_risk_df, use_container_width=True)
-
-                # Store for top 5 selection
                 st.session_state["low_risk_df"] = low_risk_df
-
             else:
                 st.info("No low-risk setups found.")
 
@@ -225,6 +285,8 @@ if mode == "Scan Universe":
                     price, rsi, adx, atr, vwap, bb_low, bb_high
                 )
 
+                strat_details = build_strategy_details(price, strategies, rsi, adx)
+
                 st.write(f"**Price:** {price:.2f}")
                 st.write(f"**RSI:** {rsi:.1f}")
                 st.write(f"**ADX:** {adx:.1f}")
@@ -232,12 +294,13 @@ if mode == "Scan Universe":
                 st.write(f"**VWAP Drift %:** {vwap_drift*100:.2f}")
                 st.write(f"**BB Position:** {bb_pos:.2f}")
 
-                st.write("**Strategies:**")
-                if strategies:
-                    for s in strategies:
-                        st.write(f"- {s}")
-                else:
-                    st.write("No strategies found")
+                st.write("### Strategy Recommendation")
+                for s in strategies:
+                    st.write(f"- {s}")
+
+                st.write("### Trade Details")
+                for key, val in strat_details.items():
+                    st.write(f"- **{key}:** {val}")
 
                 st.divider()
 
@@ -269,6 +332,8 @@ if mode == "Single Ticker":
                 price, rsi, adx, atr, vwap, bb_low, bb_high
             )
 
+            strat_details = build_strategy_details(price, strategies, rsi, adx)
+
             st.subheader(f"{ticker} — {price:.2f}")
 
             if risk_level == "LOW RISK":
@@ -285,9 +350,9 @@ if mode == "Single Ticker":
             st.write(f"BB Position: {bb_pos:.2f}")
 
             st.subheader("Recommended Strategies")
+            for s in strategies:
+                st.write(f"• {s}")
 
-            if strategies:
-                for s in strategies:
-                    st.write(f"• {s}")
-            else:
-                st.write("No suitable strategies found")
+            st.subheader("Trade Details")
+            for key, val in strat_details.items():
+                st.write(f"- **{key}:** {val}")
